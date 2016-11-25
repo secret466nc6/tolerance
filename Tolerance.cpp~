@@ -56,6 +56,53 @@ namespace {
             errs() << *v_sca << ": " << *v_vec << "\n";
         }
   }
+  Value* GetVecOpValue(IRBuilder<> builder,Value* val,VectorizeMap vec_map){
+	if(isa<LoadInst>(val)){//find add inst and 2 op is load, do SIMD "add"
+                errs()<< "****GetVecOpValue Load!\n";
+		LoadInst* ld_inst = cast<LoadInst>(val);//value to loadinst
+		Value* sca = ld_inst->getPointerOperand();
+		errs()<<"sca:"<<*sca<<"\n";
+		Value *alloca_vec = vec_map.GetVector(sca);
+		errs()<<"get vector:"<<*alloca_vec<<"\n";
+		//create load before "add"
+		LoadInst* load_val=builder.CreateLoad(alloca_vec);
+		load_val->setAlignment(16);
+		return load_val;
+	}else if(isa<BinaryOperator>(val)){
+		errs()<< "****GetVecOpValue BinaryOperator!\n";
+                BinaryOperator* bin_inst=cast<BinaryOperator>(val);
+                errs()<<"bin_inst:"<<*bin_inst<<"\n";
+                Value *bin_vec = vec_map.GetVector(bin_inst);
+                errs()<<"get vector:"<<*bin_vec<<"\n";
+                return bin_vec;
+	}else if(isa<Constant>(val)){
+                //ConstantInt* c_inst=cast<ConstantInt>(val);
+		errs()<< "****GetVecOpValue Constant!"<<*val <<"\n";
+                //create sca alloca and vec alloca, store constant and load into insertelement.
+                auto alloca_c = builder.CreateAlloca(val->getType());
+                alloca_c->setAlignment(4);
+                auto allocaVec = builder.CreateAlloca(VectorType::get(val->getType(), 4));
+                allocaVec->setAlignment(16);
+                //errs()<<"****alloca_c:"<<*alloca_c<<"\n";
+                auto store_c = builder.CreateStore(val,alloca_c);
+                auto load_c = builder.CreateLoad(alloca_c);
+                load_c->setAlignment(4);
+                errs()<<"****store_c:"<<*store_c<<"\n";
+                errs()<<"****load_c:"<<*load_c<<"\n";
+                Type* load_ty= load_c->getType();
+                errs()<<"****load_ty:"<<*load_ty<<"\n";
+                Value* val_c = UndefValue::get(VectorType::get(load_ty, 4));
+                for (unsigned i = 0; i < 4; i++)//for 4 copies
+                {
+		val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i));  
+                }
+                 errs()<<"****val_c:"<<*val_c<<"\n";
+                auto store_val=builder.CreateStore(val_c,allocaVec);
+                auto load_val=builder.CreateLoad(allocavec);
+                return load_val;
+        }
+      return NULL;
+  }
   struct TolerancePass : public FunctionPass {
     static char ID;
     TolerancePass() : FunctionPass(ID) {}
@@ -74,15 +121,17 @@ namespace {
         //BasicBlock* bb=I.getParent();
         //Find allocation instruction
         if (auto *op = dyn_cast<AllocaInst>(&I)) {
-            //errs()<< "Find AllocaInst!\n";
+            errs()<< "Find AllocaInst!\n";
             
             IRBuilder<> builder(op);
-            Type* scalar_t= op->getAllocatedType();
-            //errs()<<*scalar_t<<"\n";
+            Type* scalar_t= op->getAllocatedType();//not pointer
+            //Type* scalar_t1= op->getType();//pointer
+            errs()<<*scalar_t<<"\n";
+            //errs()<<*scalar_t1<<"\n";
             //support inst type?
             if(scalar_t->isIntegerTy()){
                 errs()<<"Find integer:"<<*scalar_t<<"\n";
-	        auto allocaVec = builder.CreateAlloca(VectorType::get(op->getType(), 4));
+	        auto allocaVec = builder.CreateAlloca(VectorType::get(scalar_t, 4));
                 allocaVec->setAlignment(16);
                 errs()<<"address sca:"<<*op<<",vec:"<<*allocaVec<<"\n";
                 vec_map.AddPair(op,allocaVec);
@@ -123,29 +172,80 @@ namespace {
         //Find load instruction & create vector before loadinst
         else if (auto *op = dyn_cast<LoadInst>(&I)) {
             IRBuilder<> builder(op);
-            Value* load_p=op->getPointerOperand();
-            Type* load_ty= load_p->getType();
+            Value* loadinst_ptr=op->getPointerOperand();
+            Type* load_ty= op->getType();
+            Type* load_ty1= loadinst_ptr->getType();
             errs()<<"~Load type:"<<*load_ty<<"\n";
-            errs()<<"*~Find Load_p:"<<*load_p<<"\n";
+            errs()<<"~Load type1:"<<*load_ty1<<"\n";
+            //errs()<<"*~Find Load_p:"<<*loadinst_ptr<<"\n";
             errs()<<"@createInsertElement:\n";
             Value* val = UndefValue::get(VectorType::get(load_ty, 4));
+            LoadInst* load_val=builder.CreateLoad(loadinst_ptr);
+            load_val->setAlignment(4);
             for (unsigned i = 0; i < 4; i++)//for 4 copies
             {
-                auto load_val=builder.CreateLoad(load_p);
-                load_val->setAlignment(4);
-                Value* get_op=load_val->getOperand(0);
-		val = builder.CreateInsertElement(val, get_op, builder.getInt32(i));
+                errs()<<"*****load_val:"<<*load_val<<"\n";
+                //errs()<<"******:"<<*loadinst_ptr<<"\n";
+       		//create insertelement instruction
+		val = builder.CreateInsertElement(val,load_val, builder.getInt32(i));  
             }
-            //create load & create insertelement instruction?
+            //get vector in map
+            auto *vec = vec_map.GetVector(loadinst_ptr);
+            errs()<<"get vector:"<<*vec<<"\n";
+            errs()<<"get insertelement:"<<*val<<"\n";
+            //create store into vector
+            StoreInst* store_val=builder.CreateStore(val,vec);
+            errs()<<"create store:"<<*store_val<<"\n";
         }
         //Find operator to neon duplication
         else if (auto *op = dyn_cast<BinaryOperator>(&I)) {
             errs()<<"~Find BinaryOperator\n";
+            auto op_name= I.getOpcodeName();
             // Insert at the point where the instruction `op` appears.
-            //IRBuilder<> builder(op);
-            // Make a multiply with the same operands as `op`.
-            //Value* lhs = op->getOperand(0);
-            //Value* rhs = op->getOperand(1);
+            IRBuilder<> builder(op);
+            Value* lhs = op->getOperand(0);
+	    Value* rhs = op->getOperand(1);
+            errs()<<"lhs:"<<*lhs<<"\n";
+	    errs()<<"rhs:"<<*rhs<<"\n";
+            Value* load_val1=GetVecOpValue(builder,lhs,vec_map);
+            Value* load_val2=GetVecOpValue(builder,rhs,vec_map);
+            if(strcmp(op_name, "add") == 0){// find op is "add"
+		    errs()<<"Find add:"<<op_name<<"\n";
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    Value *vadd = builder.CreateAdd(load_val1,load_val2);
+                    errs()<<"Create add:"<<*vadd<<"\n";
+                    //map add
+ 	            vec_map.AddPair(op, vadd);
+                    }else{
+                    errs()<<"!*!*!error in add oper:"<<*op<<"\n";
+                    }
+		    /*if(isa<LoadInst>(lhs)&&isa<LoadInst>(rhs)){//find add inst and 2 op is load, do SIMD "add"
+                        LoadInst* ld_inst1 = cast<LoadInst>(lhs);
+		        LoadInst* ld_inst2 = cast<LoadInst>(rhs);
+                        Value* sca1 = ld_inst1->getPointerOperand();
+		        Value* sca2 = ld_inst2->getPointerOperand();
+                        errs()<<"sca1:"<<*sca1<<"\n";
+		        errs()<<"sca2:"<<*sca2<<"\n";
+                        Value *alloca_vec1 = vec_map.GetVector(sca1);
+                        Value *alloca_vec2 = vec_map.GetVector(sca2);
+                        errs()<<"get vector1:"<<*alloca_vec1<<"\n";
+                        errs()<<"get vector2:"<<*alloca_vec2<<"\n";
+                        //create load before "add"
+	                LoadInst* load_val1=builder.CreateLoad(alloca_vec1);
+                        load_val1->setAlignment(16);
+                        LoadInst* load_val2=builder.CreateLoad(alloca_vec2);
+                        load_val2->setAlignment(16);
+                        Value *vadd = builder.CreateAdd(load_val1,load_val2);
+                        errs()<<"****create add:"<<*vadd<<"\n";
+                    }else{
+                        if(isa<BinaryOperator>(lhs)&&isa<Constant>(rhs))
+                        errs()<<"find constant\n";
+                    }*/
+                     
+                 
+            }
+           
+          
             //Value* mul = builder.CreateMul(lhs, rhs);
             // Everywhere the old instruction was used as an operand, use our
      	    // new multiply instruction instead.
@@ -163,6 +263,7 @@ namespace {
     }
   };
 }
+
 /**===================end of VectorizeMap========================/**/
 char TolerancePass::ID = 0;
 static RegisterPass<TolerancePass> X("tolerance", "Tolerance Pass",
