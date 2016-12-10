@@ -98,7 +98,7 @@ namespace {
                 }
                  errs()<<"****val_c:"<<*val_c<<"\n";
                 auto store_val=builder.CreateStore(val_c,allocaVec);
-                auto load_val=builder.CreateLoad(allocavec);
+                auto load_val=builder.CreateLoad(allocaVec);
                 return load_val;
         }
       return NULL;
@@ -219,30 +219,6 @@ namespace {
                     }else{
                     errs()<<"!*!*!error in add oper:"<<*op<<"\n";
                     }
-		    /*if(isa<LoadInst>(lhs)&&isa<LoadInst>(rhs)){//find add inst and 2 op is load, do SIMD "add"
-                        LoadInst* ld_inst1 = cast<LoadInst>(lhs);
-		        LoadInst* ld_inst2 = cast<LoadInst>(rhs);
-                        Value* sca1 = ld_inst1->getPointerOperand();
-		        Value* sca2 = ld_inst2->getPointerOperand();
-                        errs()<<"sca1:"<<*sca1<<"\n";
-		        errs()<<"sca2:"<<*sca2<<"\n";
-                        Value *alloca_vec1 = vec_map.GetVector(sca1);
-                        Value *alloca_vec2 = vec_map.GetVector(sca2);
-                        errs()<<"get vector1:"<<*alloca_vec1<<"\n";
-                        errs()<<"get vector2:"<<*alloca_vec2<<"\n";
-                        //create load before "add"
-	                LoadInst* load_val1=builder.CreateLoad(alloca_vec1);
-                        load_val1->setAlignment(16);
-                        LoadInst* load_val2=builder.CreateLoad(alloca_vec2);
-                        load_val2->setAlignment(16);
-                        Value *vadd = builder.CreateAdd(load_val1,load_val2);
-                        errs()<<"****create add:"<<*vadd<<"\n";
-                    }else{
-                        if(isa<BinaryOperator>(lhs)&&isa<Constant>(rhs))
-                        errs()<<"find constant\n";
-                    }*/
-                     
-                 
             }
            
           
