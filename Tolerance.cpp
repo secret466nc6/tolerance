@@ -12,6 +12,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/LLVMContext.h"
 using namespace llvm;
 
 namespace {
@@ -19,7 +20,7 @@ namespace {
 /**===================VectorizeMap========================**/
   class VectorizeMap {
     VectorizeMapTable vmap;
-
+    
     public:
     VectorizeMap(): vmap() {}
     bool IsAdded(Value *sca) {
@@ -45,10 +46,13 @@ namespace {
     VectorizeMapTable::iterator GetEnd() {
         return vmap.end();
     }
+    int GetSize(){
+        return vmap.size();
+    }
   };
   void PrintMap(VectorizeMap *map)
   {
-        errs() <<"Show Vector Map:\n";
+        errs() <<"(size = "<<map->GetSize()<<")\n";
         VectorizeMapTable::iterator iter;
         for(iter = map->GetBegin();iter!=map->GetEnd();iter++){
             Value* v_sca=iter->first;
@@ -121,11 +125,13 @@ namespace {
     
     virtual bool runOnFunction(Function &F) {
       errs() << "function name: " << F.getName() << "\n";
-
       //errs() << "Function body:\n";
       //F.dump();
       VectorizeMap vec_map;
       VectorizeMap check_map;
+      VectorizeMap recovery_map;
+      static LLVMContext TheContext;
+      AllocaInst* recovery;
       BasicBlock::iterator ignoreuntilinst;
       for (auto &B : F) {
         //errs() << "Basic block:\n";
@@ -134,7 +140,7 @@ namespace {
         for (auto &I : B) {
         //BasicBlock* bb=I.getParent();
         //Find allocation instruction
-        if(BuilderAfterflag){
+        if (BuilderAfterflag) {
         if (auto *op = dyn_cast<AllocaInst>(&I)) {
             //errs()<< "Tolerance:Find AllocaInst!\n";
             
@@ -142,7 +148,7 @@ namespace {
             
             Type* scalar_t= op->getAllocatedType();//not pointer
             //Type* scalar_t1= op->getType();//pointer
-            //errs()<<*scalar_t<<"\n";
+            errs()<<*scalar_t<<"\n";
             //errs()<<*scalar_t1<<"\n";
             //support inst type?
             if(scalar_t->isIntegerTy()){
@@ -168,101 +174,7 @@ namespace {
         }
 
         else if (StoreInst *op = dyn_cast<StoreInst>(&I)) {
-            //IRBuilder<> builder(op);
-            //Value* store_v=op->getValueOperand();//value
-	        //errs()<<"~Find store_v:"<<*store_v<<"\n";
-	       
-            //Value* store_p=op->getPointerOperand();//pointer
-	        //errs()<<"~Find store_p:"<<*store_p<<"\n";
-            //Type* load_ty= store_p->getType();
-            //errs()<<"~Load type:"<<*load_ty<<"\n";
-            
-            
-            //create store into original vector register
-            //auto *map_vec = vec_map.GetVector(store_p);
-            //Instruction to Value type
-           /* Value* lhs = op->getOperand(0);
-	    	Value* rhs = op->getOperand(1);
-	    	errs()<<"~~get store:"<<*lhs<<"\n";
-	    	errs()<<"~~get store1:"<<*rhs<<"\n";
-            //checkpoint
-	    	if(isa<BinaryOperator>(lhs)&&isa<AllocaInst>(rhs)) {//final store after binop
-                //store final binaryop value into vector
-	    		BinaryOperator* lop=cast<BinaryOperator>(lhs);
-	    		auto *lvec = vec_map.GetVector(lop);
-	    		errs()<<"get lvector:"<<*lvec<<"\n";   
-	    		AllocaInst* rop=cast<AllocaInst>(rhs);
-	    		auto *rvec = vec_map.GetVector(rop);
-	    		errs()<<"get rvector:"<<*rvec<<"\n"; 
-	    		auto store_val=builder.CreateStore(lvec,rvec);
-                store_val->setAlignment(16);
-	    		errs()<<"~~store_val:"<<*store_val<<"\n"; 
-                //end of store
-                //create mutiple of 3 
-                Value *mul_value = ConstantInt::get(lop->getType() , 3); 
-                errs()<<"~!!:"<<*mul_value<<"\n"; 
-                //errs()<<"~!!!:"<<*mul_value<<"\n"; 
-                auto *mul_three = builder.CreateMul(lop,mul_value);
-                check_map.AddPair(lhs,mul_three);
-                for (auto &U : lop->uses()) {
-                  User *user = U.getUser();  // A User is anything with operands.
-                  errs()<<*lop<<"-user:"<<*user<<"\n";
-                  if(isa<StoreInst>(*user)){
-                    //Value *mul_value = ConstantInt::get(op->getType() , 3); 
-                    //auto *mul_three = builder.CreateMul(op,mul_value);
-                    //op->replaceAllUsesWith(mul_three);
-                    user->setOperand(U.getOperandNo(), mul_three);
-                    errs()<<"ttt\n";
-                  }
-                  //user->setOperand(U.getOperandNo(), mul);
-                }*/
-                //op->eraseFromParent();
-              //  BasicBlock::iterator it(I);
-//it--;
-//builder.SetInsertPoint(it);
-                //IRBuilder<> builder1(op->getNextNode());
-                //builder.SetInsertPoint(op->getNextNode());
-                //StoreInst* store_three=builder.CreateStore(mul_three,rhs);
-                //store_three->setAlignment(4);
-                 //errs()<<"~~~store_three:"<<*store_three<<"\n";
-                //StoreInst* instToReplace =  cast<StoreInst>(op); 
-                //StoreInst* store_three = new StoreInst(mul_three,rhs);
-              
-                //store_three->setAlignment(4);
-//BasicBlock::iterator BI(op);
-//BasicBlock::iterator New(store_three);
-                //errs()<<"~!!!op2:"<<*op<<"\n"; 
-               // BI=New;
-                //op->replaceAllUsesWith(store_three);
-                //errs()<<"~!!!op2:"<<*op++<<"\n"; 
-                //op->replaceAllUsesWith(store_three);
-                /*errs()<<"~~~:"<<*lhs<<"\n";
-                errs()<<"~~~:"<<*mul_three<<"\n";
-                errs()<<"~!!!op2:"<<*op<<"\n"; 
-                lop->replaceAllUsesWith(mul_three);
-                errs()<<"~!!!op2:"<<*op<<"\n"; 
-                //BasicBlock::iterator ii(op);*/
-                //errs()<<"~!!!:"<<*store_three<<"\n"; 
-                //errs()<<"~!!!:"<<op->getParent()<<"\n"; 
-                //errs()<<"~!!!:"<<store_three->getParent()<<"\n"; 
-         
-            //BasicBlock::iterator BI(lop);
-               //ReplaceInstWithValue(lop->getParent()->getInstList(),BI,mul_three);
-                //ReplaceInstWithInst(op, store_three);
-                //store_three->eraseFromParent();
-                //errs()<<"~!!!op2:"<<*op<<"\n"; 
-                //Instruction * insII = &I;
-                //op->replaceAllUsesWith(store_three);
-                //errs()<<"~!!!replaceAllUsesWith:"<<*op<<"\n"; 
-                //op->dropAllReferences();
-                //op->eraseFromParent();
-                //op->removeFromParent();
-               // errs()<<"~!!!eraseFromParen:"<<*op<<"\n"; 
-                //errs()<<"~!!!:"<<*store_three<<"\n"; 
-                //ReplaceInstWithInst(op,store_three);
-                //ReplaceUnsafe(op,store_three);
-                //op->replaceAllUsesWith(store_three);
-                //op->eraseFromParent();
+        
         }
         //Find load instruction & create vector before loadinst
         else if (auto *op = dyn_cast<LoadInst>(&I)) {
@@ -270,7 +182,7 @@ namespace {
             BasicBlock::iterator instIt(I);
             IRBuilder<> builderafter(instIt->getParent(), ++instIt);
             ignoreuntilinst=instIt;
-            errs()<<"*@@@@*set ignore point:"<<*instIt<<"\n";
+            //errs()<<"*@@@@*set ignore point:"<<*instIt<<"\n";
             //IRBuilder<> builder(op);
             Value* loadinst_ptr=op->getPointerOperand();
             Type* load_ty= op->getType();
@@ -323,32 +235,71 @@ namespace {
                     errs()<<"Error: in ADD operator:"<<*op<<"\n";
                     }
             }
-        
 
-            //insert check
+            /**Find Check Point**/
             for (auto &U : op->uses()) {
               User *user = U.getUser();  // A User is anything with operands.
+              Value* v= U.get();
+              //errs()<<"*!@**@***!@****!@**"<<*v<<"\n";
               //errs()<<*op<<"-user:"<<*user<<"\n";
-                if(isa<StoreInst>(*user)){
+                if(isa<StoreInst>(*user)){//Find final store 
+                //Instruction* op1 = cast<Instruction>(v);
+                //if(auto *op1 = dyn_cast<StoreInst>(*user)){//Find final store 
                 BasicBlock::iterator instIt(I);
                 IRBuilder<> builderafter(instIt->getParent(), ++instIt);
-                errs()<<"*@@@@*Set ignore point:"<<*instIt<<"\n";
+                //errs()<<"*@@@@*Set ignore point:"<<*instIt<<"\n";
                 ignoreuntilinst=instIt;
-                Value *mul_value = ConstantInt::get(op->getType() , 3); 
-                    //auto *mul_three = builder.CreateMul(op,mul_value);
+                Value *mul_value = ConstantInt::get(op->getType() , 3); //only integer!!!
                 BuilderAfterflag=0;
                 Value *mul = builderafter.CreateMul(op, mul_value);
-                user->setOperand(U.getOperandNo(), mul);}
+                //create load vector
+                Value* final_store=user->getOperand(1);
+                //errs()<<"*XXXXX*:"<<*user->getOperand(1)<<"\n";
+                auto *vec = vec_map.GetVector(final_store);
+                auto *op_vec = vec_map.GetVector(op);
+                //create final store vector
+                auto* store_vec=builder.CreateStore(op_vec,vec);
+                auto* load_vec=builder.CreateLoad(vec);//before is ok
+                load_vec->setAlignment(4);
+                //create sum of three copies
+                uint64_t lane0= 0;
+                uint64_t lane1= 1;
+                uint64_t lane2= 2;
+                auto *ex0=builder.CreateExtractElement(load_vec,lane0,"extract0");
+                auto *ex1=builder.CreateExtractElement(load_vec,lane1,"extract1");
+                auto *ex2=builder.CreateExtractElement(load_vec,lane2,"extract2");
+                Instruction* recoveryinst=cast<Instruction>(ex2);
+                recovery=builder.CreateAlloca(recoveryinst->getType(),nullptr,"recovery");
+                recovery->setAlignment(4);
+                Value *vadd = builder.CreateAdd(ex0,ex1);
+                Value *vadd1 = builder.CreateAdd(vadd ,ex2);
+                //chech create after mutltiple 3
+                Value *fault_check=builderafter.CreateICmpNE(vadd1,mul);
+                //errs()<<"****"<<*user<<"\n";
+                check_map.AddPair(user,fault_check);
+                check_map.AddPair(fault_check,ex0);
+                recovery_map.AddPair(user,op);
+                //TerminatorInst *ThenTerm = nullptr, *ElseTerm = nullptr;
+                //BasicBlock::iterator it(op1);
+
+                //TerminatorInst *ThenTerm , *ElseTerm ;
+
+                //SplitBlockAndInsertIfThenElse(fault_check, op1, &ThenTerm, &ElseTerm,nullptr);
+                //builderafter.SetInsertPoint(ThenTerm);
+ 
+                //builderafter.SetInsertPoint(ElseTerm);
+                //user->setOperand(U.getOperandNo(), mul);//final store
+            }
             }
             
           }
-        }else{//builder after flag
-                errs()<<"@@@@Ignore instruction:\n";
+        } else{//builder after flag
+                //errs()<<"@@@@Ignore instruction:\n";
                 I.dump();
                 BasicBlock::iterator instIt(I);
                 //errs()<<*<<"\n";
                 if(++instIt==ignoreuntilinst){
-                    errs()<<"*@@@@*Reset builderafter at:"<<*instIt<<"\n";
+                    //errs()<<"*@@@@*Reset builderafter at:"<<*instIt<<"\n";
                     BuilderAfterflag=1;
                 }
                 //BuilderAfterflag=1;
@@ -356,27 +307,108 @@ namespace {
           //I.dump();
  
         }
-
-        errs()<<"Show LLVM IR:\n";
-        for (auto &I : B) {
-            /*if (auto *op = dyn_cast<BinaryOperator>(&I)) {
-                Value* New=check_map.GetVector(op);
-                if(check_map.IsAdded(op)) {
-                    IRBuilder<> builder(op);
-            //Value* lhs = op->getOperand(0);
-            //Value* rhs = op->getOperand(1);
-            //Value* mul = builder.CreateMul(lhs, rhs);
-                    op->replaceAllUsesWith(New);
-                }
-            }*/
-            
-            I.dump();
- 
-        }
+       
+        
+        
 
       }
+      errs()<<"Start Insert Check!\n";
+      for(int i =0 ; i<check_map.GetSize(); i++){
+          bool check_flag=0;
+          for (auto &B : F) {
+                //B.dump();
+                for (auto &I : B) {
+                    //insert check before store
+                    if (StoreInst *op = dyn_cast<StoreInst>(&I)) {
+                        if(check_map.IsAdded(op)){
+                            //errs()<<"Tolerance:Find BinaryOperator\n";
+                            auto op_name= I.getOpcodeName();
+                            // Insert at the point where the instruction `op` appears.
+                            IRBuilder<> builder(op);
+        
+                            Value *fault_check = check_map.GetVector(op);
+                            Value *ex0 = check_map.GetVector(fault_check);
+                            Instruction* faultinst=cast<Instruction>(fault_check);
+                            Value* lhs = faultinst->getOperand(0);
+                            Value* rhs = faultinst->getOperand(1);
+                           
+                            errs()<<"before op:"<<*op<<"\n";    
+                            errs()<<"insert fault check:"<<*fault_check<<"\n";    
+                            errs()<<"lhs:"<<*lhs<<"\n"; 
+                            errs()<<"rhs:"<<*rhs<<"\n";  
+                            errs()<<"ex0:"<<*ex0<<"\n";   
+                            //TerminatorInst *ThenTerm , *ElseTerm ;
+                            TerminatorInst* checkTerm = SplitBlockAndInsertIfThen(fault_check, op,false);
+                            //SplitBlockAndInsertIfThenElse(fault_check, op, &ThenTerm, &ElseTerm,nullptr);
+                            IRBuilder<> builderCheck(checkTerm);
+                            //Taking mul_three value div by ex0, because only Interger can use Rem operator.
+                            //Inter use SDIV, Float use FDIV.
+                            Value* mod_three = builderCheck.CreateSDiv(lhs,ex0,"rem3");
+                            
+                            Instruction* ty= cast<Instruction>(mod_three);
+                            Value *mul_value = ConstantInt::get(ty->getType() , 3); //only integer!!!
+                           
+                            errs()<<"mod_three:"<<*mod_three<<"\n";   
+                            errs()<<"mul_value :"<<*mul_value <<"\n";   
+                            //cmp div ex0 = 3
+                            Value* cmp_three = builderCheck.CreateICmpNE(mod_three,mul_value);
+                            //for ( BasicBlock::iterator i = checkTerm->begin(), e = checkTerm->end();i!= e; ++i)
+                            errs()<<"end"<<*checkTerm<<"\n";   
+                            //Then = div 3 can recovery
+                            TerminatorInst *ThenTerm , *ElseTerm ;
+                            SplitBlockAndInsertIfThenElse(cmp_three, checkTerm, &ThenTerm, &ElseTerm,nullptr);
+                            IRBuilder<> builderRecovery(ThenTerm);
+                            auto* store_recovery=builderRecovery.CreateStore(ex0,recovery);
+                            store_recovery->setAlignment(4);
+                            //Else = original i
+                            IRBuilder<> builderRecoveryElse(ElseTerm);                           
+                            Value *recovery_val = recovery_map.GetVector(op);
+                            auto* store_recoveryElse=builderRecoveryElse.CreateStore(recovery_val,recovery);
+                            store_recoveryElse->setAlignment(4);
+                            check_flag=1;
+                          
+                            ////user->setOperand(U.getOperandNo(), mul);//final store
+                        }
+                    }
+                    
+                    if(check_flag)
+                       break;
+                    }
+                    
+                
+                break;
+            }
+      }
+      //replace recovery value to store
+     for (auto &B : F) {
+                //B.dump();
+                for (auto &I : B) {
+                    //insert check before store
+                    if (StoreInst *op = dyn_cast<StoreInst>(&I)) {
+                        if(check_map.IsAdded(op)){
+                            IRBuilder<> builder(op);
+                            auto* load_recovery=builder.CreateLoad(recovery);
+                            load_recovery->setAlignment(4);
+                            op->setOperand(0, load_recovery);
+                        }
+                    }
+                }
+            }
+      errs()<<"Show LLVM IR:\n";
+      for (auto &B : F) {
+            B.dump();
+            for (auto &I : B) {
+              //I.dump;
+          }
+        }
+      errs()<<"Vector Map:\n";
       PrintMap(&vec_map);
+      errs()<<"Check Map:\n";
       PrintMap(&check_map);
+      errs()<<"Recovery Map:\n";
+      PrintMap(&recovery_map);
+    
+      //PrintMap(&check_map);
       return true;
     }
   };
