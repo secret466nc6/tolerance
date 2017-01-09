@@ -49,6 +49,9 @@ namespace {
     int GetSize(){
         return vmap.size();
     }
+    void DeleteVal(Value *op){
+        vmap.erase(op);
+    }
   };
   void PrintMap(VectorizeMap *map)
   {
@@ -73,7 +76,7 @@ namespace {
 		load_val->setAlignment(16);
 		return load_val;
 	}else if(isa<BinaryOperator>(val)){
-		//errs()<< "****GetVecOpValue BinaryOperator!\n";
+		//errs()<< "****GetVecOpValue BinaryOperator:\n";
         BinaryOperator* bin_inst=cast<BinaryOperator>(val);
         //errs()<<"bin_inst:"<<*bin_inst<<"\n";
         Value *bin_vec = vec_map.GetVector(bin_inst);
@@ -81,11 +84,11 @@ namespace {
         return bin_vec;
 	}else if(isa<Constant>(val)){
     	//ConstantInt* c_inst=cast<ConstantInt>(val);
-		//errs()<< "****GetVecOpValue Constant!"<<*val <<"\n";
+		errs()<< "GetVecOpValue Constant:"<<*val <<"\n";
         //create sca alloca and vec alloca, store constant and load into insertelement.
         auto alloca_c = builder.CreateAlloca(val->getType());
         alloca_c->setAlignment(4);
-        auto allocaVec = builder.CreateAlloca(VectorType::get(val->getType(), 4));
+        auto allocaVec = builder.CreateAlloca(VectorType::get(val->getType(), 4),nullptr,"allocaCons");
         //errs()<<"****constant:"<<val->getSplatValue () <<"\n";
         allocaVec->setAlignment(16);
         //errs()<<"****alloca_c:"<<*alloca_c<<"\n";
@@ -100,7 +103,7 @@ namespace {
         //Value *mul_value = ConstantInt::get(val->getType() , *val); 
         for (unsigned i = 0; i < 4; i++)//for 4 copies
         {
-			val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i));  
+			val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i),"insertCons");  
         }
         //errs()<<"****val_c:"<<*val_c<<"\n";
         auto store_val=builder.CreateStore(val_c,allocaVec);
@@ -108,15 +111,10 @@ namespace {
         auto load_val=builder.CreateLoad(allocaVec);
         load_val->setAlignment(4);
         return load_val;
+        }else {
+            errs()<< "Cannot Support Type! "<<*val <<"\n";
         }
       return NULL;
-  }
-  void ReplaceUnsafe(StoreInst *from, StoreInst *to) {
-  while (!from->use_empty()) {
-    auto &U = *from->use_begin();
-    U.set(to);
-  }
-    from->eraseFromParent();
   }
 
   struct TolerancePass : public FunctionPass {
@@ -127,11 +125,112 @@ namespace {
       errs() << "function name: " << F.getName() << "\n";
       //errs() << "Function body:\n";
       //F.dump();
-      VectorizeMap vec_map;
-      VectorizeMap check_map;
-      VectorizeMap recovery_map;
+      VectorizeMap vec_map,check_map,recovery_map,recovery_map1;
+      std::vector<Value*> binop,loadbefore,CheckPoint;
       static LLVMContext TheContext;
-      AllocaInst* recovery;
+    
+      //Dependence pass
+      for (auto &B : F) {
+       
+        for (auto &I : B) {
+            if (auto *op = dyn_cast<BinaryOperator>(&I)) {
+                //add into array
+                binop.push_back(op);
+            }
+            else if (auto *op = dyn_cast<LoadInst>(&I)) {
+                //add into array(use before now op)
+                loadbefore.push_back(op);
+            }
+            else if (StoreInst *op = dyn_cast<StoreInst>(&I)) {
+                Value* lhs = op->getOperand(0);
+                Value* rhs = op->getOperand(1);
+                errs()<<"*****Find Store:"<<*op<<"\n";
+                errs()<<"lhs :"<<*lhs <<"\n";
+                errs()<<"rhs:"<<*rhs<<"\n";
+                //left op is binop?
+                if(isa<BinaryOperator>(*lhs)){
+                    bool Pflag=false;
+                    //find right op uses (alloca inst)
+                 for (auto &U : rhs->uses()) {
+
+                       
+                        User *user = U.getUser(); 
+                        
+                        if(isa<LoadInst>(*user)){
+                            errs()<<"=Find:"<<*user<<"\n";
+                            bool Cflag=true;
+                    for(int i=0; i<loadbefore.size(); i++){
+                    //if loadinst uses before?
+                        if(user==loadbefore[i]){
+                            Cflag=false;
+                            //errs()<<"@FUCK:"<<*user<<"\n";
+                        }
+                    }
+                    //if find loadinst never use
+                    
+                    if(Cflag){
+                            errs()<<"========\n";
+                            errs()<<"BINOP map:\n";
+                            //check this load inst uses for binop
+                          for(int i=0; i<binop.size(); i++){
+                             errs()<<"binop:"<<*binop[i]<<"\n";
+                          
+                            errs()<<"loadinst:"<<*user <<"\n";
+                            for (auto &U1 : user->uses()) {
+                                User *user1 = U1.getUser(); 
+                                errs()<<"user1:"<<*user1 <<"\n";
+                                
+                                for(int i=0; i<binop.size(); i++){
+                                    if(isa<BinaryOperator>(*user1)){
+                                    //if binop uses before?
+                                        if(user1==binop[i]){
+                                            //if difference no check
+                                             errs()<<"====load no uses op!====\n";
+                                            Pflag=true;
+                                        }else{
+                                             errs()<<"====load uses new op!====\n";
+                                            Pflag=false;
+                                            break;
+                                        }
+                                    }else{
+                                        Pflag=true;
+                                    }
+                                }
+                                }
+                                if(!Pflag){
+                                    //errs()<<"====FUCK====\n";
+                                     break;
+                                }
+
+                            }
+                            //break;//only find one load never use before
+                            }//Cflag end
+                            else {
+                                errs()<<"Only Find Load before\n";
+                                //only find load before.. but it's useless
+                                Pflag=true;
+                            }
+                           if(!Pflag){
+                                    //errs()<<"====FUCK2====\n";
+                                     break;
+                                }
+
+                        }//find load end
+
+                        }
+                         if(Pflag){
+                                errs()<<"Find no binaryop uses load inst\n";
+                                CheckPoint.push_back(op);
+                            }
+                    }
+              
+                }
+            }
+        }
+      errs()<<"*=*=*CheckPoint:\n";
+      for(int i=0; i<CheckPoint.size(); i++)
+         errs()<<"CheckPoint:"<<*CheckPoint[i]<<"\n";
+      //tolerance
       BasicBlock::iterator ignoreuntilinst;
       for (auto &B : F) {
         //errs() << "Basic block:\n";
@@ -140,6 +239,7 @@ namespace {
         for (auto &I : B) {
         //BasicBlock* bb=I.getParent();
         //Find allocation instruction
+            //I.dump();
         if (BuilderAfterflag) {
         if (auto *op = dyn_cast<AllocaInst>(&I)) {
             //errs()<< "Tolerance:Find AllocaInst!\n";
@@ -148,13 +248,13 @@ namespace {
             
             Type* scalar_t= op->getAllocatedType();//not pointer
             //Type* scalar_t1= op->getType();//pointer
-            errs()<<*scalar_t<<"\n";
+            //errs()<<*scalar_t<<"\n";
             //errs()<<*scalar_t1<<"\n";
             //support inst type?
             if(scalar_t->isIntegerTy()){
                 
                 //errs()<<"Find integer:"<<*scalar_t<<"\n";
-	        	auto allocaVec = builder.CreateAlloca(VectorType::get(scalar_t, 4));
+	        	auto allocaVec = builder.CreateAlloca(VectorType::get(scalar_t, 4),nullptr,"allocaVec");
                 allocaVec->setAlignment(16);
                 //errs()<<"address sca:"<<*op<<",vec:"<<*allocaVec<<"\n";
                 vec_map.AddPair(op,allocaVec);
@@ -164,56 +264,72 @@ namespace {
                 //errs()<<"get vector:"<<*vec<<"\n";
             }  
             if(scalar_t->isFloatTy()){
-                //errs()<<"Find float:"<<"*scalar_t"<<"\n";
-                /*auto allocaVec = builder.CreateAlloca(VectorType::get(op->getType(), 4));
-                allocaVec->setAlignment(4);*/
+                auto allocaVec = builder.CreateAlloca(VectorType::get(scalar_t, 4),nullptr,"allocaVec");
+                allocaVec->setAlignment(16);
+                //errs()<<"address sca:"<<*op<<",vec:"<<*allocaVec<<"\n";
+                vec_map.AddPair(op,allocaVec);
+                //get vector demo
+                auto *vec = vec_map.GetVector(op);
+                errs()<< "Tolerance:Create FloatInst Vectorty:"<<*vec<<"\n";
             }
             if(scalar_t->isVectorTy()){
                 //errs()<<"Find vector:"<<*scalar_t<<"\n";
             }
         }
 
-        else if (StoreInst *op = dyn_cast<StoreInst>(&I)) {
         
-        }
         //Find load instruction & create vector before loadinst
         else if (auto *op = dyn_cast<LoadInst>(&I)) {
-            BuilderAfterflag=0;
-            BasicBlock::iterator instIt(I);
-            IRBuilder<> builderafter(instIt->getParent(), ++instIt);
-            ignoreuntilinst=instIt;
-            //errs()<<"*@@@@*set ignore point:"<<*instIt<<"\n";
-            //IRBuilder<> builder(op);
-            Value* loadinst_ptr=op->getPointerOperand();
-            Type* load_ty= op->getType();
-            /*Type* load_ty1= loadinst_ptr->getType();
-            errs()<<"~Load type:"<<*load_ty<<"\n";
-            errs()<<"~Load type1:"<<*load_ty1<<"\n";*/
-            //errs()<<"*~Find Load_p:"<<*loadinst_ptr<<"\n";
-            errs()<<"Tolerance:Create Vector Element:\n";
-            Value* val = UndefValue::get(VectorType::get(load_ty, 4));
-            //LoadInst* load_val=builder.CreateLoad(loadinst_ptr);
-            //load_val->setAlignment(4);
-            for (unsigned i = 0; i < 4; i++)//for 4 copies
-            {
-                //errs()<<"*****load_val:"<<*load_val<<"\n";
-                //errs()<<"******:"<<*loadinst_ptr<<"\n";
-       			//create insertelement instruction
-				val = builderafter.CreateInsertElement(val,op, builderafter.getInt32(i));  
+            bool VecFlag=false;
+                //find load is use for binary operator
+                for (auto &U : op->uses()) {
+                    User *user = U.getUser(); 
+                    if(isa<BinaryOperator>(*user)){
+                        VecFlag=true;
+                    }
+                }
+            if(VecFlag){
+                BuilderAfterflag=0;
+                BasicBlock::iterator instIt(I);
+                IRBuilder<> builderafter(instIt->getParent(), ++instIt);
+                ignoreuntilinst=instIt;
+                //errs()<<"*@@@@*set ignore point:"<<*instIt<<"\n";
+                //IRBuilder<> builder(op);
+                Value* loadinst_ptr=op->getPointerOperand();
+                Type* load_ty= op->getType();
+                /*Type* load_ty1= loadinst_ptr->getType();
+                errs()<<"~Load type:"<<*load_ty<<"\n";
+                errs()<<"~Load type1:"<<*load_ty1<<"\n";*/
+                //errs()<<"*~Find Load_p:"<<*loadinst_ptr<<"\n";
+                errs()<<"Tolerance:Create Vector Element.\n";
+                Value* val = UndefValue::get(VectorType::get(load_ty, 4));
+                //LoadInst* load_val=builder.CreateLoad(loadinst_ptr);
+                //load_val->setAlignment(4);
+                for (unsigned i = 0; i < 4; i++)//for 4 copies
+                {
+                    //errs()<<"*****load_val:"<<*load_val<<"\n";
+                    //errs()<<"******:"<<*loadinst_ptr<<"\n";
+           			//create insertelement instruction
+    				val = builderafter.CreateInsertElement(val,op, builderafter.getInt32(i),"insertElmt");  
+                }
+                //get vector in map
+                auto *vec = vec_map.GetVector(loadinst_ptr);
+                //errs()<<"get vector:"<<*vec<<"\n";
+                //errs()<<"get insertelement:"<<*val<<"\n";
+                //create store into vector
+                StoreInst* store_val=builderafter.CreateStore(val,vec);
+                store_val->setAlignment(16);
+                //errs()<<"create store:"<<*store_val<<"\n";
             }
-            //get vector in map
-            auto *vec = vec_map.GetVector(loadinst_ptr);
-            //errs()<<"get vector:"<<*vec<<"\n";
-            //errs()<<"get insertelement:"<<*val<<"\n";
-            //create store into vector
-            StoreInst* store_val=builderafter.CreateStore(val,vec);
-            store_val->setAlignment(16);
-            //errs()<<"create store:"<<*store_val<<"\n";
         }
         //Find operator to neon duplication
         else if (auto *op = dyn_cast<BinaryOperator>(&I)) {
             //errs()<<"Tolerance:Find BinaryOperator\n";
             auto op_name= I.getOpcodeName();
+            Type* op_type = op->getType();
+            //auto op_name1= op->getOpcode();
+            errs()<<"OP Type:"<<*op_type<<"\n";
+            errs()<<"-*-*BinaryOperator is:"<<op_name<<"\n";
             // Insert at the point where the instruction `op` appears.
             IRBuilder<> builder(op);
             Value* lhs = op->getOperand(0);
@@ -224,34 +340,133 @@ namespace {
             //Value* mul = builder.CreateMul(lhs, mul_value);
             Value* load_val1=GetVecOpValue(builder,lhs,vec_map);
             Value* load_val2=GetVecOpValue(builder,rhs,vec_map);
+            //#1
             if(strcmp(op_name, "add") == 0){// find op is "add"
 		    //errs()<<"Find add:"<<op_name<<"\n";
                     if(load_val1!=NULL&&load_val2!=NULL) {
-                    Value *vadd = builder.CreateAdd(load_val1,load_val2);
+                    Value *vadd = builder.CreateAdd(load_val1,load_val2,"Vop");
                     //errs()<<"Create add:"<<*vadd<<"\n";
                     //map add
  	                vec_map.AddPair(op, vadd);
                     }else{
-                    errs()<<"Error: in ADD operator:"<<*op<<"\n";
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
                     }
+            }else if(strcmp(op_name, "sub") == 0){// find op is "fadd"
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    Value *vop = builder.CreateSub(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "mul") == 0){// find op is "fadd"
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    Value *vop = builder.CreateMul(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "sdiv") == 0){// find op is "fadd"
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    Value *vop = builder.CreateSDiv(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "fadd") == 0){// find op is "fadd"
+            //errs()<<"Find add:"<<op_name<<"\n";
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    Value *vadd = builder.CreateFAdd(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vadd<<"\n";
+                    //map add
+                    vec_map.AddPair(op, vadd);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "fsub") == 0){// find op is "fadd"
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    Value *vop = builder.CreateFSub(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "fmul") == 0){// find op is "fadd"
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    Value *vop = builder.CreateFMul(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "fdiv") == 0){// find op is "fadd"
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    Value *vop = builder.CreateFDiv(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else {
+                errs()<<"#1 Not Support Operator Type:"<<*op_name<<"\n";
             }
 
             /**Find Check Point**/
             for (auto &U : op->uses()) {
               User *user = U.getUser();  // A User is anything with operands.
-              Value* v= U.get();
-              //errs()<<"*!@**@***!@****!@**"<<*v<<"\n";
-              //errs()<<*op<<"-user:"<<*user<<"\n";
+              //Value* v= U.get();
+              errs()<<"*****Find:"<<*user<<"\n";
+              errs()<<*op<<" - Find Check Point:"<<*user<<"\n";
                 if(isa<StoreInst>(*user)){//Find final store 
+                    bool Cflag=false;
+                    for(int i=0; i<CheckPoint.size(); i++){
+                        //errs()<<"@@@@@@@@@@@@@@@@Nocheck:"<<*CheckPoint[i]<<"\n";
+                        //errs()<<"@@@@@@@@@@@@@@@@User:"<<*user<<"\n";
+                        if(user==CheckPoint[i]){
+                            Cflag=true;
+                            //errs()<<"@FUCK:"<<*user<<"\n";
+                        }
+                    }
+        
+                    //Value* v= U.get();
+                    /*
+                    Value *v = user->getOperand(1);
+                     errs()<<*user<<" get operands: "<<*user->getOperand(1)<<"\n";
+                    for (auto &U1 : v->uses()) {
+                        User *user1 = U1.getUser();
+                        errs()<<"*****Is Insert?"<<*user1<<"\n";
+                    }*/
+
                 //Instruction* op1 = cast<Instruction>(v);
                 //if(auto *op1 = dyn_cast<StoreInst>(*user)){//Find final store 
+                if(Cflag){
                 BasicBlock::iterator instIt(I);
                 IRBuilder<> builderafter(instIt->getParent(), ++instIt);
                 //errs()<<"*@@@@*Set ignore point:"<<*instIt<<"\n";
                 ignoreuntilinst=instIt;
-                Value *mul_value = ConstantInt::get(op->getType() , 3); //only integer!!!
                 BuilderAfterflag=0;
-                Value *mul = builderafter.CreateMul(op, mul_value);
+                //#2
+                Value *mul,*mul_value;
+                if(op_type->isIntegerTy()){
+                    mul_value = ConstantInt::get(op->getType() , 3); 
+                    mul = builderafter.CreateMul(op, mul_value,"Fmul");
+                    //errs()<<"mul"<<*mul<<"\n";
+                }else if(op_type->isFloatTy()){
+                    mul_value = ConstantFP::get(op->getType() , 3.0); 
+                    mul = builderafter.CreateFMul(op, mul_value,"Fmul");
+                    //errs()<<"Fmul"<<*mul<<"\n";
+                }else {
+                errs()<<"#2 Not Support Operator Type:"<<*op_type<<"\n";
+                }
                 //create load vector
                 Value* final_store=user->getOperand(1);
                 //errs()<<"*XXXXX*:"<<*user->getOperand(1)<<"\n";
@@ -261,24 +476,45 @@ namespace {
                 auto* store_vec=builder.CreateStore(op_vec,vec);
                 auto* load_vec=builder.CreateLoad(vec);//before is ok
                 load_vec->setAlignment(4);
+                
                 //create sum of three copies
                 uint64_t lane0= 0;
                 uint64_t lane1= 1;
                 uint64_t lane2= 2;
-                auto *ex0=builder.CreateExtractElement(load_vec,lane0,"extract0");
-                auto *ex1=builder.CreateExtractElement(load_vec,lane1,"extract1");
-                auto *ex2=builder.CreateExtractElement(load_vec,lane2,"extract2");
+                auto *ex0=builder.CreateExtractElement(load_vec,lane0,"extractE");
+                auto *ex1=builder.CreateExtractElement(load_vec,lane1,"extractE");
+                auto *ex2=builder.CreateExtractElement(load_vec,lane2,"extractE");
+               
                 Instruction* recoveryinst=cast<Instruction>(ex2);
-                recovery=builder.CreateAlloca(recoveryinst->getType(),nullptr,"recovery");
+                AllocaInst* recovery=builder.CreateAlloca(recoveryinst->getType(),nullptr,"Recovery");
                 recovery->setAlignment(4);
-                Value *vadd = builder.CreateAdd(ex0,ex1);
-                Value *vadd1 = builder.CreateAdd(vadd ,ex2);
+                errs()<<"Recovery:"<<*recovery<<"\n";
+                Value * Rval;
+                Rval= builderafter.CreateStore(op, recovery);
+
+                //#3
+                Value *vadd,*vadd1,*fault_check;
+                if(op_type->isIntegerTy()){
+                vadd = builder.CreateAdd(ex0,ex1,"sum");
+                vadd1 = builder.CreateAdd(vadd ,ex2,"sum");
+                fault_check=builderafter.CreateICmpNE(vadd1,mul,"Fcmp");
+                //errs()<<"add"<<*vadd<<"\n";
+                }else if(op_type->isFloatTy()){
+                vadd = builder.CreateFAdd(ex0,ex1,"sum");
+                vadd1 = builder.CreateFAdd(vadd ,ex2,"sum");
+                //errs()<<"Fadd"<<*vadd<<"\n";
+                fault_check=builderafter.CreateFCmpUNE(vadd1,mul,"Fcmp");
+                }else {
+                errs()<<"#3 Not Support Operator Type:"<<*op_type<<"\n";
+                }
                 //chech create after mutltiple 3
-                Value *fault_check=builderafter.CreateICmpNE(vadd1,mul);
+               
+                //errs()<<"CMP"<<*fault_check<<"\n";
                 //errs()<<"****"<<*user<<"\n";
                 check_map.AddPair(user,fault_check);
                 check_map.AddPair(fault_check,ex0);
                 recovery_map.AddPair(user,op);
+                recovery_map1.AddPair(user,recovery);
                 //TerminatorInst *ThenTerm = nullptr, *ElseTerm = nullptr;
                 //BasicBlock::iterator it(op1);
 
@@ -286,16 +522,17 @@ namespace {
 
                 //SplitBlockAndInsertIfThenElse(fault_check, op1, &ThenTerm, &ElseTerm,nullptr);
                 //builderafter.SetInsertPoint(ThenTerm);
- 
+
                 //builderafter.SetInsertPoint(ElseTerm);
                 //user->setOperand(U.getOperandNo(), mul);//final store
+                }//Cflag end
             }
             }
             
           }
         } else{//builder after flag
                 //errs()<<"@@@@Ignore instruction:\n";
-                I.dump();
+                //I.dump();
                 BasicBlock::iterator instIt(I);
                 //errs()<<*<<"\n";
                 if(++instIt==ignoreuntilinst){
@@ -312,48 +549,84 @@ namespace {
         
 
       }
-      errs()<<"Start Insert Check!\n";
-      for(int i =0 ; i<check_map.GetSize(); i++){
-          bool check_flag=0;
-          for (auto &B : F) {
+        
+     //Delete map value after insert successfully
+      for(int i =0 ; i<recovery_map1.GetSize(); i++){
+        errs()<<"Recovery Map:\n";
+         //PrintMap(&recovery_map);
+         errs()<<"Start Insert Check!\n";
+         
+            bool check_flag=0;
+            for (auto &B : F) {
+                //errs()<<"----------\n";
                 //B.dump();
+               // errs()<<"----------\n";
                 for (auto &I : B) {
                     //insert check before store
                     if (StoreInst *op = dyn_cast<StoreInst>(&I)) {
-                        if(check_map.IsAdded(op)){
-                            //errs()<<"Tolerance:Find BinaryOperator\n";
-                            auto op_name= I.getOpcodeName();
-                            // Insert at the point where the instruction `op` appears.
+                       errs()<<*op<<"\n";
+                       if(recovery_map.IsAdded(op)){
+                            
+                            //errs()<<"Insert check!\n";
+                             //errs()<<*op<<"\n";
+                             
+                            
+                          
                             IRBuilder<> builder(op);
-        
                             Value *fault_check = check_map.GetVector(op);
+                            Value *recovery = recovery_map1.GetVector(op);
+                            errs()<<"OP:"<<*op<<"\n";
+                            errs()<<"fault_check"<<*fault_check<<"\n";  
                             Value *ex0 = check_map.GetVector(fault_check);
                             Instruction* faultinst=cast<Instruction>(fault_check);
                             Value* lhs = faultinst->getOperand(0);
                             Value* rhs = faultinst->getOperand(1);
-                           
-                            errs()<<"before op:"<<*op<<"\n";    
-                            errs()<<"insert fault check:"<<*fault_check<<"\n";    
-                            errs()<<"lhs:"<<*lhs<<"\n"; 
-                            errs()<<"rhs:"<<*rhs<<"\n";  
-                            errs()<<"ex0:"<<*ex0<<"\n";   
-                            //TerminatorInst *ThenTerm , *ElseTerm ;
+                            Value *recovery_val = recovery_map.GetVector(op);
+
+                            //BinaryOperator* op_inst= cast<BinaryOperator>(recovery_val);
+                            Type* op_type =recovery_val ->getType();
+                         
+                             
                             TerminatorInst* checkTerm = SplitBlockAndInsertIfThen(fault_check, op,false);
-                            //SplitBlockAndInsertIfThenElse(fault_check, op, &ThenTerm, &ElseTerm,nullptr);
+                   
+                          
                             IRBuilder<> builderCheck(checkTerm);
                             //Taking mul_three value div by ex0, because only Interger can use Rem operator.
                             //Inter use SDIV, Float use FDIV.
-                            Value* mod_three = builderCheck.CreateSDiv(lhs,ex0,"rem3");
-                            
-                            Instruction* ty= cast<Instruction>(mod_three);
-                            Value *mul_value = ConstantInt::get(ty->getType() , 3); //only integer!!!
-                           
-                            errs()<<"mod_three:"<<*mod_three<<"\n";   
-                            errs()<<"mul_value :"<<*mul_value <<"\n";   
-                            //cmp div ex0 = 3
-                            Value* cmp_three = builderCheck.CreateICmpNE(mod_three,mul_value);
+                       
+                            //#4
+                            Value *mod_three,*mul_value,*cmp_three;
+                            if(op_type->isIntegerTy()){
+                                 
+                                mod_three = builderCheck.CreateSDiv(lhs,ex0,"remThree");
+                                
+                                Instruction* ty= cast<Instruction>(mod_three);
+                                mul_value = ConstantInt::get(ty->getType() , 3);
+                               
+                                //errs()<<"mod_three:"<<*mod_three<<"\n";   
+                                //errs()<<"mul_value :"<<*mul_value <<"\n";   
+                                //cmp div ex0 = 3
+                              
+                                cmp_three = builderCheck.CreateICmpNE(mod_three,mul_value,"FcmpThree");
+                            }else if(op_type->isFloatTy()){
+                                
+                                mod_three = builderCheck.CreateFDiv(lhs,ex0,"remThree");
+                                
+                                Instruction* ty= cast<Instruction>(mod_three);
+                                mul_value = ConstantFP::get(ty->getType() , 3);
+                               
+                                //errs()<<"Fmod_three:"<<*mod_three<<"\n";   
+                                //errs()<<"Fmul_value :"<<*mul_value <<"\n";   
+                                //cmp div ex0 = 3
+                              
+                                cmp_three = builderCheck.CreateFCmpUNE(mod_three,mul_value,"FcmpThree");
+                                //errs()<<"Fcmp :"<<*cmp_three <<"\n"; 
+                            }else {
+                            errs()<<"#4 Not Support Operator Type:"<<*op_type<<"\n";
+                            }
+                            //}
                             //for ( BasicBlock::iterator i = checkTerm->begin(), e = checkTerm->end();i!= e; ++i)
-                            errs()<<"end"<<*checkTerm<<"\n";   
+                            //errs()<<"end"<<*checkTerm<<"\n";   
                             //Then = div 3 can recovery
                             TerminatorInst *ThenTerm , *ElseTerm ;
                             SplitBlockAndInsertIfThenElse(cmp_three, checkTerm, &ThenTerm, &ElseTerm,nullptr);
@@ -362,12 +635,16 @@ namespace {
                             store_recovery->setAlignment(4);
                             //Else = original i
                             IRBuilder<> builderRecoveryElse(ElseTerm);                           
-                            Value *recovery_val = recovery_map.GetVector(op);
+                            
                             auto* store_recoveryElse=builderRecoveryElse.CreateStore(recovery_val,recovery);
                             store_recoveryElse->setAlignment(4);
+                            
                             check_flag=1;
-                          
+                           
+                            errs()<<"Delete Map!\n";
+                            recovery_map.DeleteVal(op);
                             ////user->setOperand(U.getOperandNo(), mul);//final store
+                           
                         }
                     }
                     
@@ -375,7 +652,7 @@ namespace {
                        break;
                     }
                     
-                
+                if(check_flag)
                 break;
             }
       }
@@ -386,6 +663,7 @@ namespace {
                     //insert check before store
                     if (StoreInst *op = dyn_cast<StoreInst>(&I)) {
                         if(check_map.IsAdded(op)){
+                            Value *recovery = recovery_map1.GetVector(op);
                             IRBuilder<> builder(op);
                             auto* load_recovery=builder.CreateLoad(recovery);
                             load_recovery->setAlignment(4);
@@ -395,18 +673,22 @@ namespace {
                 }
             }
       errs()<<"Show LLVM IR:\n";
+      /*
       for (auto &B : F) {
             B.dump();
             for (auto &I : B) {
-              //I.dump;
+              //I.dump();
           }
         }
+        */
       errs()<<"Vector Map:\n";
       PrintMap(&vec_map);
       errs()<<"Check Map:\n";
       PrintMap(&check_map);
       errs()<<"Recovery Map:\n";
       PrintMap(&recovery_map);
+      errs()<<"Recovery Map1:\n";
+      PrintMap(&recovery_map1);
     
       //PrintMap(&check_map);
       return true;
