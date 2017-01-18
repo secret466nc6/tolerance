@@ -24,14 +24,21 @@ namespace {
     public:
     VectorizeMap(): vmap() {}
     bool IsAdded(Value *sca) {
-	return vmap.find(sca)!=vmap.end();
+    return vmap.find(sca)!=vmap.end();
     }
     void AddPair(Value* sca, Value* vec) {
-	VectorizeMapTable::iterator iter=vmap.find(sca);
+    VectorizeMapTable::iterator iter=vmap.find(sca);
         if(iter == vmap.end())//do not find vectorize
-	  vmap.insert(std::make_pair(sca, vec));
+      vmap.insert(std::make_pair(sca, vec));
         else
           errs()<<"Error:"<<*sca <<" has been vectorized.\n";
+    }
+    bool Findair(Value* sca) {
+    VectorizeMapTable::iterator iter=vmap.find(sca);
+        if(iter == vmap.end())//do not find vectorize
+            return false;
+        else
+            return true;
     }
     Value* GetVector(Value* sca) {
         VectorizeMapTable::iterator iter=vmap.find(sca);
@@ -64,27 +71,27 @@ namespace {
         }
   }
   Value* GetVecOpValue(IRBuilder<> builder,Value* val,VectorizeMap vec_map){
-	if(isa<LoadInst>(val)){//find add inst and 2 op is load, do SIMD "add"
+    if(isa<LoadInst>(val)){//find add inst and 2 op is load, do SIMD "add"
         //errs()<< "****GetVecOpValue Load!\n";
-		LoadInst* ld_inst = cast<LoadInst>(val);//value to loadinst
-		Value* sca = ld_inst->getPointerOperand();
-		//errs()<<"sca:"<<*sca<<"\n";
-		Value *alloca_vec = vec_map.GetVector(sca);
-		//errs()<<"get vector:"<<*alloca_vec<<"\n";
-		//create load before "add"
-		LoadInst* load_val=builder.CreateLoad(alloca_vec);
-		load_val->setAlignment(16);
-		return load_val;
-	}else if(isa<BinaryOperator>(val)){
-		//errs()<< "****GetVecOpValue BinaryOperator:\n";
+        LoadInst* ld_inst = cast<LoadInst>(val);//value to loadinst
+        Value* sca = ld_inst->getPointerOperand();
+        //errs()<<"sca:"<<*sca<<"\n";
+        Value *alloca_vec = vec_map.GetVector(sca);
+        //errs()<<"get vector:"<<*alloca_vec<<"\n";
+        //create load before "add"
+        LoadInst* load_val=builder.CreateLoad(alloca_vec);
+        load_val->setAlignment(16);
+        return load_val;
+    }else if(isa<BinaryOperator>(val)){
+        //errs()<< "****GetVecOpValue BinaryOperator:\n";
         BinaryOperator* bin_inst=cast<BinaryOperator>(val);
         //errs()<<"bin_inst:"<<*bin_inst<<"\n";
         Value *bin_vec = vec_map.GetVector(bin_inst);
         //errs()<<"get vector:"<<*bin_vec<<"\n";
         return bin_vec;
-	}else if(isa<Constant>(val)){
-    	//ConstantInt* c_inst=cast<ConstantInt>(val);
-		errs()<< "GetVecOpValue Constant:"<<*val <<"\n";
+    }else if(isa<Constant>(val)){
+        //ConstantInt* c_inst=cast<ConstantInt>(val);
+        errs()<< "GetVecOpValue Constant:"<<*val <<"\n";
         //create sca alloca and vec alloca, store constant and load into insertelement.
         auto alloca_c = builder.CreateAlloca(val->getType());
         alloca_c->setAlignment(4);
@@ -103,7 +110,7 @@ namespace {
         //Value *mul_value = ConstantInt::get(val->getType() , *val); 
         for (unsigned i = 0; i < 4; i++)//for 4 copies
         {
-			val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i),"insertCons");  
+            val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i),"insertCons");  
         }
         //errs()<<"****val_c:"<<*val_c<<"\n";
         auto store_val=builder.CreateStore(val_c,allocaVec);
@@ -125,10 +132,10 @@ namespace {
       errs() << "function name: " << F.getName() << "\n";
       //errs() << "Function body:\n";
       //F.dump();
-      VectorizeMap vec_map,check_map,recovery_map,recovery_map1;
+      VectorizeMap vec_map,check_map,recovery_map,recovery_map1,vec_stored_map;
       std::vector<Value*> binop,loadbefore,CheckPoint;
       static LLVMContext TheContext;
-    
+      bool allcheck=false;
       //Dependence pass
       for (auto &B : F) {
        
@@ -149,82 +156,86 @@ namespace {
                 errs()<<"rhs:"<<*rhs<<"\n";
                 //left op is binop?
                 if(isa<BinaryOperator>(*lhs)){
-                    bool Pflag=false;
-                    //find right op uses (alloca inst)
-                 for (auto &U : rhs->uses()) {
+                    if(allcheck){
+                        CheckPoint.push_back(op);
+                    }else
+                    {
+                        bool Pflag=false;
+                        //find right op uses (alloca inst)
+                        for (auto &U : rhs->uses()) {
 
-                       
-                        User *user = U.getUser(); 
+                           
+                            User *user = U.getUser(); 
+                            
+                            if(isa<LoadInst>(*user)){
+                                errs()<<"=Find:"<<*user<<"\n";
+                                bool Cflag=true;
+                        for(int i=0; i<loadbefore.size(); i++){
+                        //if loadinst uses before?
+                            if(user==loadbefore[i]){
+                                Cflag=false;
+                                //errs()<<"@FUCK:"<<*user<<"\n";
+                            }
+                        }
+                        //if find loadinst never use
                         
-                        if(isa<LoadInst>(*user)){
-                            errs()<<"=Find:"<<*user<<"\n";
-                            bool Cflag=true;
-                    for(int i=0; i<loadbefore.size(); i++){
-                    //if loadinst uses before?
-                        if(user==loadbefore[i]){
-                            Cflag=false;
-                            //errs()<<"@FUCK:"<<*user<<"\n";
-                        }
-                    }
-                    //if find loadinst never use
-                    
-                    if(Cflag){
-                            errs()<<"========\n";
-                            errs()<<"BINOP map:\n";
-                            //check this load inst uses for binop
-                          for(int i=0; i<binop.size(); i++){
-                             errs()<<"binop:"<<*binop[i]<<"\n";
-                          
-                            errs()<<"loadinst:"<<*user <<"\n";
-                            for (auto &U1 : user->uses()) {
-                                User *user1 = U1.getUser(); 
-                                errs()<<"user1:"<<*user1 <<"\n";
-                                
-                                for(int i=0; i<binop.size(); i++){
-                                    if(isa<BinaryOperator>(*user1)){
-                                    //if binop uses before?
-                                        if(user1==binop[i]){
-                                            //if difference no check
-                                             errs()<<"====load no uses op!====\n";
-                                            Pflag=true;
+                        if(Cflag){
+                                errs()<<"========\n";
+                                errs()<<"BINOP map:\n";
+                                //check this load inst uses for binop
+                              for(int i=0; i<binop.size(); i++){
+                                 errs()<<"binop:"<<*binop[i]<<"\n";
+                              
+                                errs()<<"loadinst:"<<*user <<"\n";
+                                for (auto &U1 : user->uses()) {
+                                    User *user1 = U1.getUser(); 
+                                    errs()<<"user1:"<<*user1 <<"\n";
+                                    
+                                    for(int i=0; i<binop.size(); i++){
+                                        if(isa<BinaryOperator>(*user1)){
+                                        //if binop uses before?
+                                            if(user1==binop[i]){
+                                                //if difference no check
+                                                 errs()<<"====load no uses op!====\n";
+                                                Pflag=true;
+                                            }else{
+                                                 errs()<<"====load uses new op!====\n";
+                                                Pflag=false;
+                                                break;
+                                            }
                                         }else{
-                                             errs()<<"====load uses new op!====\n";
-                                            Pflag=false;
-                                            break;
+                                            Pflag=true;
                                         }
-                                    }else{
-                                        Pflag=true;
                                     }
+                                    }
+                                    if(!Pflag){
+                                        
+                                         break;
+                                    }
+
                                 }
+                                //break;//only find one load never use before
+                                }//Cflag end
+                                else {
+                                    errs()<<"Only Find Load before\n";
+                                    //only find load before.. but it's useless
+                                    Pflag=true;
                                 }
-                                if(!Pflag){
-                                    //errs()<<"====FUCK====\n";
-                                     break;
-                                }
+                               if(!Pflag){
+                                        
+                                         break;
+                                    }
+
+                            }//find load end
 
                             }
-                            //break;//only find one load never use before
-                            }//Cflag end
-                            else {
-                                errs()<<"Only Find Load before\n";
-                                //only find load before.. but it's useless
-                                Pflag=true;
+                            if(Pflag){
+                                    errs()<<"Find no binaryop uses load inst\n";
+                                    CheckPoint.push_back(op);
                             }
-                           if(!Pflag){
-                                    //errs()<<"====FUCK2====\n";
-                                     break;
-                                }
-
-                        }//find load end
-
-                        }
-                         if(Pflag){
-                                errs()<<"Find no binaryop uses load inst\n";
-                                CheckPoint.push_back(op);
-                            }
-                    }
-              
-                }
+                        }//find sotre inst's left op is binop
+                    }//allcheck else end
+                }//find store end
             }
         }
       errs()<<"*=*=*CheckPoint:\n";
@@ -232,6 +243,7 @@ namespace {
          errs()<<"CheckPoint:"<<*CheckPoint[i]<<"\n";
       //tolerance
       BasicBlock::iterator ignoreuntilinst;
+
       for (auto &B : F) {
         //errs() << "Basic block:\n";
         //B.dump();
@@ -254,7 +266,7 @@ namespace {
             if(scalar_t->isIntegerTy()){
                 
                 //errs()<<"Find integer:"<<*scalar_t<<"\n";
-	        	auto allocaVec = builder.CreateAlloca(VectorType::get(scalar_t, 4),nullptr,"allocaVec");
+                auto allocaVec = builder.CreateAlloca(VectorType::get(scalar_t, 4),nullptr,"allocaVec");
                 allocaVec->setAlignment(16);
                 //errs()<<"address sca:"<<*op<<",vec:"<<*allocaVec<<"\n";
                 vec_map.AddPair(op,allocaVec);
@@ -280,7 +292,7 @@ namespace {
         
         //Find load instruction & create vector before loadinst
         else if (auto *op = dyn_cast<LoadInst>(&I)) {
-            bool VecFlag=false;
+            bool VecFlag=false;//if load for binop
                 //find load is use for binary operator
                 for (auto &U : op->uses()) {
                     User *user = U.getUser(); 
@@ -289,14 +301,24 @@ namespace {
                     }
                 }
             if(VecFlag){
+                Value* loadinst_ptr=op->getPointerOperand();
+                Type* load_ty= op->getType();
+                //Value *load_dst = op->getOperand(0);
+                //errs()<<"XXXXXXXXXXXxloadinst_ptr:"<<*loadinst_ptr<<"\n";
+                if(vec_stored_map.Findair(loadinst_ptr)){
+                    auto *vecdst = vec_stored_map.GetVector(loadinst_ptr);
+                    //errs()<<"XXXXXXXXXXXxvecdst:"<<*vecdst<<"\n";
+                }else
+                {
                 BuilderAfterflag=0;
                 BasicBlock::iterator instIt(I);
                 IRBuilder<> builderafter(instIt->getParent(), ++instIt);
                 ignoreuntilinst=instIt;
                 //errs()<<"*@@@@*set ignore point:"<<*instIt<<"\n";
                 //IRBuilder<> builder(op);
-                Value* loadinst_ptr=op->getPointerOperand();
-                Type* load_ty= op->getType();
+                
+                //
+                //
                 /*Type* load_ty1= loadinst_ptr->getType();
                 errs()<<"~Load type:"<<*load_ty<<"\n";
                 errs()<<"~Load type1:"<<*load_ty1<<"\n";*/
@@ -309,8 +331,8 @@ namespace {
                 {
                     //errs()<<"*****load_val:"<<*load_val<<"\n";
                     //errs()<<"******:"<<*loadinst_ptr<<"\n";
-           			//create insertelement instruction
-    				val = builderafter.CreateInsertElement(val,op, builderafter.getInt32(i),"insertElmt");  
+                    //create insertelement instruction
+                    val = builderafter.CreateInsertElement(val,op, builderafter.getInt32(i),"insertElmt");  
                 }
                 //get vector in map
                 auto *vec = vec_map.GetVector(loadinst_ptr);
@@ -320,6 +342,7 @@ namespace {
                 StoreInst* store_val=builderafter.CreateStore(val,vec);
                 store_val->setAlignment(16);
                 //errs()<<"create store:"<<*store_val<<"\n";
+                }
             }
         }
         //Find operator to neon duplication
@@ -333,27 +356,28 @@ namespace {
             // Insert at the point where the instruction `op` appears.
             IRBuilder<> builder(op);
             Value* lhs = op->getOperand(0);
-	    	Value* rhs = op->getOperand(1);
+            Value* rhs = op->getOperand(1);
             //errs()<<"lhs:"<<*lhs<<"\n";
-	    	//errs()<<"rhs:"<<*rhs<<"\n";
+            //errs()<<"rhs:"<<*rhs<<"\n";
             //Value *mul_value = ConstantInt::get(op->getType() , 3); 
             //Value* mul = builder.CreateMul(lhs, mul_value);
             Value* load_val1=GetVecOpValue(builder,lhs,vec_map);
             Value* load_val2=GetVecOpValue(builder,rhs,vec_map);
+            Value *vop;
             //#1
             if(strcmp(op_name, "add") == 0){// find op is "add"
-		    //errs()<<"Find add:"<<op_name<<"\n";
+            //errs()<<"Find add:"<<op_name<<"\n";
                     if(load_val1!=NULL&&load_val2!=NULL) {
-                    Value *vadd = builder.CreateAdd(load_val1,load_val2,"Vop");
+                    vop = builder.CreateAdd(load_val1,load_val2,"Vop");
                     //errs()<<"Create add:"<<*vadd<<"\n";
                     //map add
- 	                vec_map.AddPair(op, vadd);
+                    vec_map.AddPair(op, vop);
                     }else{
                     errs()<<"Error: in Vector operator:"<<*op<<"\n";
                     }
             }else if(strcmp(op_name, "sub") == 0){// find op is "fadd"
                     if(load_val1!=NULL&&load_val2!=NULL) {
-                    Value *vop = builder.CreateSub(load_val1,load_val2,"Vop");
+                    vop = builder.CreateSub(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vop<<"\n";
                     vec_map.AddPair(op, vop);
                     }else{
@@ -362,7 +386,7 @@ namespace {
                     }
             }else if(strcmp(op_name, "mul") == 0){// find op is "fadd"
                     if(load_val1!=NULL&&load_val2!=NULL) {
-                    Value *vop = builder.CreateMul(load_val1,load_val2,"Vop");
+                    vop = builder.CreateMul(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vop<<"\n";
                     vec_map.AddPair(op, vop);
                     }else{
@@ -371,7 +395,7 @@ namespace {
                     }
             }else if(strcmp(op_name, "sdiv") == 0){// find op is "fadd"
                     if(load_val1!=NULL&&load_val2!=NULL) {
-                    Value *vop = builder.CreateSDiv(load_val1,load_val2,"Vop");
+                    vop = builder.CreateSDiv(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vop<<"\n";
                     vec_map.AddPair(op, vop);
                     }else{
@@ -381,17 +405,17 @@ namespace {
             }else if(strcmp(op_name, "fadd") == 0){// find op is "fadd"
             //errs()<<"Find add:"<<op_name<<"\n";
                     if(load_val1!=NULL&&load_val2!=NULL) {
-                    Value *vadd = builder.CreateFAdd(load_val1,load_val2,"Vop");
+                    vop = builder.CreateFAdd(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vadd<<"\n";
                     //map add
-                    vec_map.AddPair(op, vadd);
+                    vec_map.AddPair(op, vop);
                     }else{
                     errs()<<"Error: in Vector operator:"<<*op<<"\n";
                     
                     }
             }else if(strcmp(op_name, "fsub") == 0){// find op is "fadd"
                     if(load_val1!=NULL&&load_val2!=NULL) {
-                    Value *vop = builder.CreateFSub(load_val1,load_val2,"Vop");
+                    vop = builder.CreateFSub(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vop<<"\n";
                     vec_map.AddPair(op, vop);
                     }else{
@@ -400,7 +424,7 @@ namespace {
                     }
             }else if(strcmp(op_name, "fmul") == 0){// find op is "fadd"
                     if(load_val1!=NULL&&load_val2!=NULL) {
-                    Value *vop = builder.CreateFMul(load_val1,load_val2,"Vop");
+                    vop = builder.CreateFMul(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vop<<"\n";
                     vec_map.AddPair(op, vop);
                     }else{
@@ -409,7 +433,7 @@ namespace {
                     }
             }else if(strcmp(op_name, "fdiv") == 0){// find op is "fadd"
                     if(load_val1!=NULL&&load_val2!=NULL) {
-                    Value *vop = builder.CreateFDiv(load_val1,load_val2,"Vop");
+                    vop = builder.CreateFDiv(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vop<<"\n";
                     vec_map.AddPair(op, vop);
                     }else{
@@ -422,10 +446,16 @@ namespace {
 
             /**Find Check Point**/
             for (auto &U : op->uses()) {
-              User *user = U.getUser();  // A User is anything with operands.
-              //Value* v= U.get();
-              errs()<<"*****Find:"<<*user<<"\n";
-              errs()<<*op<<" - Find Check Point:"<<*user<<"\n";
+                User *user = U.getUser();  // A User is anything with operands.
+                //Value* v= U.get();
+                errs()<<"*****Find:"<<*user<<"\n";
+                errs()<<*op<<" - Find Check Point:"<<*user<<"\n";
+                Value *rdst = user->getOperand(1);
+                auto *vecdst  = vec_map.GetVector(rdst);
+                errs()<<"XXXXXXXXXXXxVOPd:"<<*vop<<"\n";
+                errs()<<"XXXXXXXXXXXxFind:"<<*vecdst<<"\n";
+                Value *vecstr = builder.CreateStore(vop,vecdst);
+                vec_stored_map.AddPair(rdst,vecdst);//save vec have stored map
                 if(isa<StoreInst>(*user)){//Find final store 
                     bool Cflag=false;
                     for(int i=0; i<CheckPoint.size(); i++){
@@ -468,13 +498,13 @@ namespace {
                 errs()<<"#2 Not Support Operator Type:"<<*op_type<<"\n";
                 }
                 //create load vector
-                Value* final_store=user->getOperand(1);
+                //Value* final_store=user->getOperand(1);
                 //errs()<<"*XXXXX*:"<<*user->getOperand(1)<<"\n";
-                auto *vec = vec_map.GetVector(final_store);
-                auto *op_vec = vec_map.GetVector(op);
+                //auto *vec = vec_map.GetVector(final_store);
+                //auto *op_vec = vec_map.GetVector(op);
                 //create final store vector
-                auto* store_vec=builder.CreateStore(op_vec,vec);
-                auto* load_vec=builder.CreateLoad(vec);//before is ok
+                //auto* store_vec=builder.CreateStore(op_vec,vec);
+                auto* load_vec=builder.CreateLoad(vecdst);//before is ok
                 load_vec->setAlignment(4);
                 
                 //create sum of three copies
@@ -489,8 +519,7 @@ namespace {
                 AllocaInst* recovery=builder.CreateAlloca(recoveryinst->getType(),nullptr,"Recovery");
                 recovery->setAlignment(4);
                 errs()<<"Recovery:"<<*recovery<<"\n";
-                Value * Rval;
-                Rval= builderafter.CreateStore(op, recovery);
+                Value *Rval = builderafter.CreateStore(op, recovery);
 
                 //#3
                 Value *vadd,*vadd1,*fault_check;
@@ -685,8 +714,8 @@ namespace {
       PrintMap(&vec_map);
       errs()<<"Check Map:\n";
       PrintMap(&check_map);
-      errs()<<"Recovery Map:\n";
-      PrintMap(&recovery_map);
+      //errs()<<"Recovery Map:\n";
+      //PrintMap(&recovery_map);
       errs()<<"Recovery Map1:\n";
       PrintMap(&recovery_map1);
     
