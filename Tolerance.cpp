@@ -245,6 +245,7 @@ namespace {
         }
       errs()<<"*=*=*CheckPoint:\n";
       bool Pflag=false;
+      //CREATE recovery allocation instruction
       for(int i=0; i<CheckPoint.size(); i++)
          errs()<<"CheckPoint:"<<*CheckPoint[i]<<"\n";
          for (auto &B : F) {
