@@ -33,7 +33,7 @@ namespace {
         else
           errs()<<"Error:"<<*sca <<" has been vectorized.\n";
     }
-    bool Findair(Value* sca) {
+    bool Findpair(Value* sca) {
     VectorizeMapTable::iterator iter=vmap.find(sca);
         if(iter == vmap.end())//do not find vectorize
             return false;
@@ -70,9 +70,106 @@ namespace {
             errs() << *v_sca << ": " << *v_vec << "\n";
         }
   }
+  //get ori(ex int vec) and excract to new(ex float vec) and create transform inst
+  Value* GetTranslateTy(IRBuilder<> builder,Value* vec_val,Value* val,bool IsExctact){
+     errs()<<"GetTranslateTy:"<<*val<<"\n";
+    auto op = cast<Instruction>(val);
+    auto op_name= op->getOpcodeName();
+    Type* op_type = op->getType();
+    auto allocaVec = builder.CreateAlloca(VectorType::get(op_type, 4),nullptr,"Talloca");
+    //errs()<<"****constant:"<<val->getSplatValue () <<"\n";
+    allocaVec->setAlignment(16);
+    //auto op_name1= op->getOpcode();
+    //errs()<<"get op name:"<<*op_name<<"\n";
+    //errs()<<"get op name1:"<<op_name1<<"\n";
+    errs()<<"op_name:"<<op_name<<"\n";
+    errs()<<"vec_val:"<<*vec_val<<"\n";
+    errs()<<"op_type:"<<*op_type<<"\n";
+    Value* ex;
+    if(IsExctact){
+        uint64_t lane0= 0;
+        ex=builder.CreateExtractElement(vec_val,lane0,"Textract");
+        errs()<<"ex:"<<*ex<<"\n";
+    }else
+    {
+        ex=vec_val;
+        errs()<<"ex:"<<*ex<<"\n";
+    }
+    
+    Value *val_t;
+    if(strcmp(op_name, "trunc") == 0){
+        val_t = builder.CreateTrunc(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "zext") == 0){
+        val_t = builder.CreateZExt(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "zextortrunc") == 0){
+        val_t = builder.CreateZExtOrTrunc(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "sextortrunc") == 0){
+        val_t = builder.CreateSExtOrTrunc(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "fptoui") == 0){
+        val_t = builder.CreateFPToUI(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "fptosi") == 0){
+        val_t = builder.CreateFPToSI(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "uitofp") == 0){
+        val_t = builder.CreateUIToFP(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "sitofp") == 0){
+        val_t = builder.CreateSIToFP(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "fptrunc") == 0){
+        val_t = builder.CreateFPTrunc(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "fpext") == 0){
+        val_t = builder.CreateFPExt(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "ptrtoint") == 0){
+        val_t = builder.CreatePtrToInt(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "inttoptr") == 0){
+        val_t = builder.CreateIntToPtr(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "bitcast") == 0){
+        val_t = builder.CreateBitCast(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "addrspacecast") == 0){
+        val_t = builder.CreateAddrSpaceCast(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "zextorbitcast") == 0){
+        val_t = builder.CreateZExtOrBitCast(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "sextorbitcast") == 0){
+        val_t = builder.CreateSExtOrBitCast(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else if(strcmp(op_name, "truncorbitcast") == 0){
+        val_t = builder.CreateTruncOrBitCast(ex, op_type, "Tval");
+        errs()<<"val_t:"<<*val_t<<"\n";
+    }else {
+        errs()<<"Not support this"<<"\n";
+        val_t = ex;
+    }
+    Value* val_c = UndefValue::get(VectorType::get(op_type, 4));
+    //Value *mul_value = ConstantInt::get(val->getType() , *val); 
+    for (unsigned i = 0; i < 4; i++)//for 4 copies
+    {
+        val_c = builder.CreateInsertElement(val_c,val_t, builder.getInt32(i),"insertT");  
+    }
+    errs()<<"val_c:"<<*val_c<<"\n";
+    errs()<<"allocaVec:"<<*allocaVec<<"\n";
+    auto store_val=builder.CreateStore(val_c,allocaVec);
+    store_val->setAlignment(4);
+    errs()<<"store_val:"<<*store_val<<"\n";
+    auto load_val=builder.CreateLoad(allocaVec);
+    load_val->setAlignment(4);
+    return load_val;
+  } 
   Value* GetVecOpValue(IRBuilder<> builder,Value* val,VectorizeMap vec_map){
     if(isa<LoadInst>(val)){//find add inst and 2 op is load, do SIMD "add"
-        //errs()<< "****GetVecOpValue Load!\n";
+        errs()<< "****GetVecOpValue Load!\n";
         LoadInst* ld_inst = cast<LoadInst>(val);//value to loadinst
         Value* sca = ld_inst->getPointerOperand();
         //errs()<<"sca:"<<*sca<<"\n";
@@ -119,11 +216,45 @@ namespace {
         load_val->setAlignment(4);
         return load_val;
         }else {
-            errs()<< "Cannot Support Type! "<<*val <<"\n";
+            errs()<< "Transforms Not Support Type! "<<*val <<"\n";
+            /*bool IsExctact=true;
+            Instruction* vop = cast<Instruction>(val);
+           
+            
+            Value* lhs = vop->getOperand(0);
+            errs()<< " lhs: "<<*lhs <<"\n";
+            if(isa<LoadInst>(lhs)){
+                errs()<< "Got Load!\n";
+                LoadInst* ld_inst = cast<LoadInst>(lhs);
+                Value* sca = ld_inst->getPointerOperand();
+                errs()<<"sca:"<<*sca<<"\n";
+                if(vec_map.Findpair(sca))
+                {
+                    Value *alloca_vec = vec_map.GetVector(sca);
+                    errs()<<"get vector:"<<*alloca_vec<<"\n";
+                    //create load before "add"
+                    LoadInst* load_val=builder.CreateLoad(alloca_vec);
+                    load_val->setAlignment(16);
+                    return GetTranslateTy(builder,load_val,val,IsExctact);
+                }else{
+                    errs()<<"No get vector!"<<"\n";
+                    IsExctact=false;
+                    return GetTranslateTy(builder,lhs,val,IsExctact);
+                }
+                //return GetTranslateTy(builder,load_val,val);
+            }else if(isa<BinaryOperator>(lhs)){
+                errs()<< "Got BinaryOp!\n";
+                //errs()<< "****GetVecOpValue BinaryOperator:\n";
+                BinaryOperator* bin_inst=cast<BinaryOperator>(lhs);
+                //errs()<<"bin_inst:"<<*bin_inst<<"\n";
+                Value *bin_vec = vec_map.GetVector(bin_inst);
+                //errs()<<"get vector:"<<*bin_vec<<"\n";
+                return bin_vec;
+            }*/
         }
       return NULL;
   }
-
+  
   struct TolerancePass : public FunctionPass {
     static char ID;
     TolerancePass() : FunctionPass(ID) {}
@@ -157,6 +288,7 @@ namespace {
                 errs()<<"rhs:"<<*rhs<<"\n";
                 //left op is binop?
                 if(isa<BinaryOperator>(*lhs)){
+
                     if(allcheck){
                         CheckPoint.push_back(op);
                     }else
@@ -168,19 +300,19 @@ namespace {
                            
                             User *user = U.getUser(); 
                             
-                            if(isa<LoadInst>(*user)){
-                                errs()<<"=Find:"<<*user<<"\n";
-                                bool Cflag=true;
-                        for(int i=0; i<loadbefore.size(); i++){
-                        //if loadinst uses before?
-                            if(user==loadbefore[i]){
-                                Cflag=false;
-                                //errs()<<"@FUCK:"<<*user<<"\n";
-                            }
-                        }
+                        if(isa<LoadInst>(*user)){
+                            errs()<<"=Find:"<<*user<<"\n";
+                            bool Cflag=true;
+                            for(int i=0; i<loadbefore.size(); i++){
+                            //if loadinst uses before?
+                                if(user==loadbefore[i]){//find load before = already used
+                                    Cflag=false;
+                                    //errs()<<"@FUCK:"<<*user<<"\n";
+                                }
+                             }
                         //if find loadinst never use
                         
-                        if(Cflag){
+                            if(Cflag){
                                 errs()<<"========\n";
                                 errs()<<"BINOP map:\n";
                                 //check this load inst uses for binop
@@ -193,10 +325,9 @@ namespace {
                                     errs()<<"user1:"<<*user1 <<"\n";
                                     
                                     for(int i=0; i<binop.size(); i++){
-                                        if(isa<BinaryOperator>(*user1)){
+                                        if(isa<BinaryOperator>(*user1)){//Is use to do binop
                                         //if binop uses before?
                                             if(user1==binop[i]){
-                                                //if difference no check
                                                  errs()<<"====load no uses op!====\n";
                                                 Pflag=true;
                                             }else{
@@ -216,16 +347,16 @@ namespace {
 
                                 }
                                 //break;//only find one load never use before
-                                }//Cflag end
+                            }//Cflag end
                                 else {
                                     errs()<<"Only Find Load before\n";
                                     //only find load before.. but it's useless
                                     Pflag=true;
                                 }
-                               if(!Pflag){
+                                if(!Pflag){
                                         
-                                         break;
-                                    }
+                                    break;
+                                }
 
                             }//find load end
 
@@ -275,8 +406,8 @@ namespace {
       BasicBlock::iterator ignoreuntilinst;
 
       for (auto &B : F) {
-        //errs() << "Basic block:\n";
-        //B.dump();
+        errs() << "@@@@Basic block:";
+        B.dump();
         bool BuilderAfterflag=1;
         for (auto &I : B) {
         //BasicBlock* bb=I.getParent();
@@ -305,7 +436,7 @@ namespace {
                 errs()<< "Tolerance:Create AllocaInst Vectorty:"<<*vec<<"\n";
                 //errs()<<"get vector:"<<*vec<<"\n";
             }  
-            if(scalar_t->isFloatTy()){
+            else if(scalar_t->isFloatTy()){
                 auto allocaVec = builder.CreateAlloca(VectorType::get(scalar_t, 4),nullptr,"allocaVec");
                 allocaVec->setAlignment(16);
                 //errs()<<"address sca:"<<*op<<",vec:"<<*allocaVec<<"\n";
@@ -313,8 +444,10 @@ namespace {
                 //get vector demo
                 auto *vec = vec_map.GetVector(op);
                 errs()<< "Tolerance:Create FloatInst Vectorty:"<<*vec<<"\n";
+            }else if(scalar_t->isVectorTy()){
+                //errs()<<"Find vector:"<<*scalar_t<<"\n";
             }
-            if(scalar_t->isVectorTy()){
+            else if(scalar_t->isVectorTy()){
                 //errs()<<"Find vector:"<<*scalar_t<<"\n";
             }
         }
@@ -335,7 +468,7 @@ namespace {
                 Type* load_ty= op->getType();
                 //Value *load_dst = op->getOperand(0);
                 //errs()<<"XXXXXXXXXXXxloadinst_ptr:"<<*loadinst_ptr<<"\n";
-                if(vec_stored_map.Findair(loadinst_ptr)){
+                if(vec_stored_map.Findpair(loadinst_ptr)){
                     auto *vecdst = vec_stored_map.GetVector(loadinst_ptr);
                     //errs()<<"XXXXXXXXXXXxvecdst:"<<*vecdst<<"\n";
                 }else
@@ -352,25 +485,33 @@ namespace {
                 /*Type* load_ty1= loadinst_ptr->getType();
                 errs()<<"~Load type:"<<*load_ty<<"\n";
                 errs()<<"~Load type1:"<<*load_ty1<<"\n";*/
-                //errs()<<"*~Find Load_p:"<<*loadinst_ptr<<"\n";
+                errs()<<"*~Find op:"<<*op<<"\n";
+                errs()<<"*~Find Load_p:"<<*loadinst_ptr<<"\n";
                 errs()<<"Tolerance:Create Vector Element.\n";
-                Value* val = UndefValue::get(VectorType::get(load_ty, 4));
-                //LoadInst* load_val=builder.CreateLoad(loadinst_ptr);
-                //load_val->setAlignment(4);
-                for (unsigned i = 0; i < 4; i++)//for 4 copies
-                {
-                    //errs()<<"*****load_val:"<<*load_val<<"\n";
-                    //errs()<<"******:"<<*loadinst_ptr<<"\n";
-                    //create insertelement instruction
-                    val = builderafter.CreateInsertElement(val,op, builderafter.getInt32(i),"insertElmt");  
+                PrintMap(&vec_map);
+                if(vec_map.Findpair(loadinst_ptr)){
+                    Value* val = UndefValue::get(VectorType::get(load_ty, 4));
+                    //LoadInst* load_val=builder.CreateLoad(loadinst_ptr);
+                    //load_val->setAlignment(4);
+                    for (unsigned i = 0; i < 4; i++)//for 4 copies
+                    {
+                        //errs()<<"*****load_val:"<<*load_val<<"\n";
+                        //errs()<<"******:"<<*loadinst_ptr<<"\n";
+                        //create insertelement instruction
+                        val = builderafter.CreateInsertElement(val,op, builderafter.getInt32(i),"insertElmt");  
+                        errs()<<"******val:"<<*val<<"\n";
+                    }
+                    //get vector in map
+                
+                    errs()<<"XXXXXXXXXXXxloadinst_ptr:"<<*loadinst_ptr<<"\n";
+                    auto *vec = vec_map.GetVector(loadinst_ptr);//original load's alloca inst
+                    errs()<<"XXXXXXXXXXXxvec_ptr:"<<*vec<<"\n";
+                    //errs()<<"get vector:"<<*vec<<"\n";
+                    //errs()<<"get insertelement:"<<*val<<"\n";
+                    //create store into vector
+                    StoreInst* store_val=builderafter.CreateStore(val,vec);
+                    store_val->setAlignment(16);
                 }
-                //get vector in map
-                auto *vec = vec_map.GetVector(loadinst_ptr);
-                //errs()<<"get vector:"<<*vec<<"\n";
-                //errs()<<"get insertelement:"<<*val<<"\n";
-                //create store into vector
-                StoreInst* store_val=builderafter.CreateStore(val,vec);
-                store_val->setAlignment(16);
                 //errs()<<"create store:"<<*store_val<<"\n";
                 }
             }
@@ -405,7 +546,7 @@ namespace {
                     }else{
                     errs()<<"Error: in Vector operator:"<<*op<<"\n";
                     }
-            }else if(strcmp(op_name, "sub") == 0){// find op is "fadd"
+            }else if(strcmp(op_name, "sub") == 0){
                     if(load_val1!=NULL&&load_val2!=NULL) {
                     vop = builder.CreateSub(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vop<<"\n";
@@ -414,16 +555,18 @@ namespace {
                     errs()<<"Error: in Vector operator:"<<*op<<"\n";
                     
                     }
-            }else if(strcmp(op_name, "mul") == 0){// find op is "fadd"
+            }else if(strcmp(op_name, "mul") == 0){
                     if(load_val1!=NULL&&load_val2!=NULL) {
                     vop = builder.CreateMul(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vop<<"\n";
+                    errs()<<"original Vop:"<<*op<<"\n";
+                    errs()<<"Create Vop:"<<*vop<<"\n";
                     vec_map.AddPair(op, vop);
                     }else{
                     errs()<<"Error: in Vector operator:"<<*op<<"\n";
                     
                     }
-            }else if(strcmp(op_name, "sdiv") == 0){// find op is "fadd"
+            }else if(strcmp(op_name, "sdiv") == 0){
                     if(load_val1!=NULL&&load_val2!=NULL) {
                     vop = builder.CreateSDiv(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vop<<"\n";
@@ -443,7 +586,7 @@ namespace {
                     errs()<<"Error: in Vector operator:"<<*op<<"\n";
                     
                     }
-            }else if(strcmp(op_name, "fsub") == 0){// find op is "fadd"
+            }else if(strcmp(op_name, "fsub") == 0){
                     if(load_val1!=NULL&&load_val2!=NULL) {
                     vop = builder.CreateFSub(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vop<<"\n";
@@ -452,7 +595,7 @@ namespace {
                     errs()<<"Error: in Vector operator:"<<*op<<"\n";
                     
                     }
-            }else if(strcmp(op_name, "fmul") == 0){// find op is "fadd"
+            }else if(strcmp(op_name, "fmul") == 0){
                     if(load_val1!=NULL&&load_val2!=NULL) {
                     vop = builder.CreateFMul(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vop<<"\n";
@@ -461,9 +604,63 @@ namespace {
                     errs()<<"Error: in Vector operator:"<<*op<<"\n";
                     
                     }
-            }else if(strcmp(op_name, "fdiv") == 0){// find op is "fadd"
+            }else if(strcmp(op_name, "fdiv") == 0){
                     if(load_val1!=NULL&&load_val2!=NULL) {
                     vop = builder.CreateFDiv(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "and") == 0){
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    vop = builder.CreateAnd(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "or") == 0){
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    vop = builder.CreateOr(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "xor") == 0){
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    vop = builder.CreateXor(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "shl") == 0){
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    vop = builder.CreateShl(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "lshr") == 0){
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    vop = builder.CreateLShr(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "ashr") == 0){
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    vop = builder.CreateAShr(load_val1,load_val2,"Vop");
                     //errs()<<"Create Vop:"<<*vop<<"\n";
                     vec_map.AddPair(op, vop);
                     }else{
@@ -475,20 +672,24 @@ namespace {
             }
 
             /**Find Check Point**/
+            //if find store, do vecop's store, and check is checkpoint? then insert mul 3
+            //if not, just create vop above
             for (auto &U : op->uses()) {
                 User *user = U.getUser();  // A User is anything with operands.
                 //Value* v= U.get();
                 errs()<<"*****Find:"<<*user<<"\n";
                 errs()<<*op<<" - Find Check Point:"<<*user<<"\n";
-                Value *rdst = user->getOperand(1);
-                auto *vecdst  = vec_map.GetVector(rdst);
-                errs()<<"XXXXXXXXXXXxVOPd:"<<*vop<<"\n";
-                errs()<<"XXXXXXXXXXXxFind:"<<*vecdst<<"\n";
-                Value *vecstr = builder.CreateStore(vop,vecdst);
-                vec_stored_map.AddPair(rdst,vecdst);//save vec have stored map
+
                 int recovery_count=0;
                 if(isa<StoreInst>(*user)){//Find final store 
                     bool Cflag=false;
+                    Value *rdst = user->getOperand(1);
+                errs()<<"XXXXXXXXXXXxrdst:"<<*rdst<<"\n";
+                auto *vecdst  = vec_map.GetVector(rdst);
+                //errs()<<"XXXXXXXXXXXxVOPd:"<<*vop<<"\n";
+                //errs()<<"XXXXXXXXXXXxFind:"<<*vecdst<<"\n";
+                Value *vecstr = builder.CreateStore(vop,vecdst);
+                vec_stored_map.AddPair(rdst,vecdst);//save vec have stored map
                     for(int i=0; i<CheckPoint.size(); i++){
                         //errs()<<"@@@@@@@@@@@@@@@@Nocheck:"<<*CheckPoint[i]<<"\n";
                         //errs()<<"@@@@@@@@@@@@@@@@User:"<<*user<<"\n";
