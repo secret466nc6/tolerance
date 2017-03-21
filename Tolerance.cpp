@@ -890,12 +890,12 @@ namespace {
                             TerminatorInst *ThenTerm , *ElseTerm ;
                             SplitBlockAndInsertIfThenElse(cmp_three, checkTerm, &ThenTerm, &ElseTerm,nullptr);
                             IRBuilder<> builderRecovery(ThenTerm);
-                            auto* store_recovery=builderRecovery.CreateStore(ex0,recovery);
+                            auto* store_recovery=builderRecovery.CreateStore(recovery_val,recovery);
                             store_recovery->setAlignment(4);
                             //Else = original i
                             IRBuilder<> builderRecoveryElse(ElseTerm);                           
                             
-                            auto* store_recoveryElse=builderRecoveryElse.CreateStore(recovery_val,recovery);
+                            auto* store_recoveryElse=builderRecoveryElse.CreateStore(ex0,recovery);
                             store_recoveryElse->setAlignment(4);
                             
                             check_flag=1;
@@ -916,7 +916,9 @@ namespace {
             }
       }
       //replace recovery value to store
+      int basic_num=0;
      for (auto &B : F) {
+        basic_num++;
                 //B.dump();
                 for (auto &I : B) {
                     //insert check before store
@@ -948,7 +950,7 @@ namespace {
       //PrintMap(&recovery_map);
       errs()<<"Recovery Map1:\n";
       PrintMap(&recovery_map1);
-    
+     errs()<<"Basic block num:"<<basic_num<<"\n";
       //PrintMap(&check_map);
       return true;
     }
