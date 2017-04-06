@@ -60,8 +60,7 @@ namespace {
         vmap.erase(op);
     }
   };
-  void PrintMap(VectorizeMap *map)
-  {
+  void PrintMap(VectorizeMap *map) {
         errs() <<"(size = "<<map->GetSize()<<")\n";
         VectorizeMapTable::iterator iter;
         for(iter = map->GetBegin();iter!=map->GetEnd();iter++){
@@ -70,19 +69,26 @@ namespace {
             errs() << *v_sca << ": " << *v_vec << "\n";
         }
   }
-  //get ori(ex int vec) and excract to new(ex float vec) and create transform inst
-  Value* GetTranslateTy(IRBuilder<> builder,Value* vec_val,Value* val,bool IsExctact){
-     errs()<<"GetTranslateTy:"<<*val<<"\n";
-    auto op = cast<Instruction>(val);
-    auto op_name= op->getOpcodeName();
-    Type* op_type = op->getType();
-    auto allocaVec = builder.CreateAlloca(VectorType::get(op_type, 4),nullptr,"Talloca");
+  //get ori(ex int vec) and exctract to new(ex float vec) and create transform inst
+  //if vectorize, exctract it and create new vector and return it's load inst
+  //if not, use ori load inst and create new vector and return it's load inst
+  //return GetTranslateTy(builder,load_val,val,IsExctact);
+  Value* GetTranslateTy(IRBuilder<> builder, Value* vec_val,Value* val,bool IsVec){
+    errs()<<"GetTranslateTy:"<<*val<<"\n";
+    auto op1 = cast<Instruction>(val);
+    auto op_name= op1->getOpcodeName();
+    
+    
+    Type* op_type_dst = op1->getType();
+   
+    //auto allocaVec = builder.CreateAlloca(VectorType::get(op_type, 4),nullptr,"Talloca");
     //errs()<<"****constant:"<<val->getSplatValue () <<"\n";
-    allocaVec->setAlignment(16);
+    //allocaVec->setAlignment(16);
     //auto op_name1= op->getOpcode();
     //errs()<<"get op name:"<<*op_name<<"\n";
     //errs()<<"get op name1:"<<op_name1<<"\n";
     errs()<<"op_name:"<<op_name<<"\n";
+    /*
     errs()<<"vec_val:"<<*vec_val<<"\n";
     errs()<<"op_type:"<<*op_type<<"\n";
     Value* ex;
@@ -94,64 +100,73 @@ namespace {
     {
         ex=vec_val;
         errs()<<"ex:"<<*ex<<"\n";
+    }*/
+    Value* ex;
+    if(!IsVec){
+        Type* op_type_sca = vec_val->getType();
+        Type* op_type = VectorType::get(op_type_sca, 4);
+        auto allocaVec = builder.CreateAlloca(op_type,nullptr,"Talloca");
+        Value* val_c = UndefValue::get(VectorType::get(op_type, 4));
+        for (unsigned i = 0; i < 4; i++)//for 4 copies
+        {
+            val_c = builder.CreateInsertElement(val_c,vec_val, builder.getInt32(i),"insertT");  
+        }
+        errs()<<"val_c:"<<*val_c<<"\n";
+        errs()<<"allocaVec:"<<*allocaVec<<"\n";
+        auto store_val=builder.CreateStore(val_c,allocaVec);
+        store_val->setAlignment(4);
+        errs()<<"store_val:"<<*store_val<<"\n";
+        auto load_val=builder.CreateLoad(allocaVec);
+        load_val->setAlignment(4);
+        ex=load_val;
+    }else
+    {
+        ex=vec_val;
+        errs()<<"ex:"<<*ex<<"\n";
     }
-    
     Value *val_t;
+    //vec do same as ori transform inst
     if(strcmp(op_name, "trunc") == 0){
-        val_t = builder.CreateTrunc(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateTrunc(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "zext") == 0){
-        val_t = builder.CreateZExt(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateZExt(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "zextortrunc") == 0){
-        val_t = builder.CreateZExtOrTrunc(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateZExtOrTrunc(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "sextortrunc") == 0){
-        val_t = builder.CreateSExtOrTrunc(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateSExtOrTrunc(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "fptoui") == 0){
-        val_t = builder.CreateFPToUI(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateFPToUI(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "fptosi") == 0){
-        val_t = builder.CreateFPToSI(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateFPToSI(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "uitofp") == 0){
-        val_t = builder.CreateUIToFP(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateUIToFP(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "sitofp") == 0){
-        val_t = builder.CreateSIToFP(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateSIToFP(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "fptrunc") == 0){
-        val_t = builder.CreateFPTrunc(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateFPTrunc(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "fpext") == 0){
-        val_t = builder.CreateFPExt(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateFPExt(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "ptrtoint") == 0){
-        val_t = builder.CreatePtrToInt(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreatePtrToInt(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "inttoptr") == 0){
-        val_t = builder.CreateIntToPtr(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateIntToPtr(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "bitcast") == 0){
-        val_t = builder.CreateBitCast(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateBitCast(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "addrspacecast") == 0){
-        val_t = builder.CreateAddrSpaceCast(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateAddrSpaceCast(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "zextorbitcast") == 0){
-        val_t = builder.CreateZExtOrBitCast(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateZExtOrBitCast(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "sextorbitcast") == 0){
-        val_t = builder.CreateSExtOrBitCast(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateSExtOrBitCast(ex, op_type_dst, "Tval");
     }else if(strcmp(op_name, "truncorbitcast") == 0){
-        val_t = builder.CreateTruncOrBitCast(ex, op_type, "Tval");
-        errs()<<"val_t:"<<*val_t<<"\n";
+        val_t = builder.CreateTruncOrBitCast(ex, op_type_dst, "Tval");       
     }else {
         errs()<<"Not support this"<<"\n";
         val_t = ex;
     }
+    errs()<<"val_t:"<<*val_t<<"\n";
+    return val_t;
+    /*
     Value* val_c = UndefValue::get(VectorType::get(op_type, 4));
     //Value *mul_value = ConstantInt::get(val->getType() , *val); 
     for (unsigned i = 0; i < 4; i++)//for 4 copies
@@ -165,9 +180,9 @@ namespace {
     errs()<<"store_val:"<<*store_val<<"\n";
     auto load_val=builder.CreateLoad(allocaVec);
     load_val->setAlignment(4);
-    return load_val;
+    return load_val;*/
   } 
-  Value* GetVecOpValue(IRBuilder<> builder,Value* val,VectorizeMap vec_map){
+  Value* GetVecOpValue(IRBuilder<> builder,Value* val,VectorizeMap vec_map,Type *op_type){
     if(isa<LoadInst>(val)){//find add inst and 2 op is load, do SIMD "add"
         errs()<< "****GetVecOpValue Load!\n";
         LoadInst* ld_inst = cast<LoadInst>(val);//value to loadinst
@@ -187,6 +202,7 @@ namespace {
         //errs()<<"get vector:"<<*bin_vec<<"\n";
         return bin_vec;
     }else if(isa<Constant>(val)){
+       /*
         //ConstantInt* c_inst=cast<ConstantInt>(val);
         errs()<< "GetVecOpValue Constant:"<<*val <<"\n";
         //create sca alloca and vec alloca, store constant and load into insertelement.
@@ -214,17 +230,222 @@ namespace {
         store_val->setAlignment(4);
         auto load_val=builder.CreateLoad(allocaVec);
         load_val->setAlignment(4);
-        return load_val;
+
+        return load_val;*/
+        //##double2
+        Constant* c = dyn_cast<Constant>(val);
+        if(op_type->isDoubleTy()){
+            return ConstantVector::getSplat(2, c);
         }else {
-            errs()<< "Transforms Not Support Type! "<<*val <<"\n";
-            /*bool IsExctact=true;
+            return ConstantVector::getSplat(4, c);
+        }
+        
+        
+    }else if(isa<CallInst>(val)){
+        errs()<< "Find Call Inst: "<<*val <<"\n";
+        Value* CallInst = vec_map.GetVector(val);
+        Value* CallInstVec= vec_map.GetVector(CallInst);
+        errs()<< "Alloca: "<<*CallInst <<"\n";
+        errs()<< "Vector: "<<*CallInstVec <<"\n";
+
+        auto store_c = builder.CreateStore(val,CallInst);
+        auto load_c = builder.CreateLoad(CallInst);
+        load_c->setAlignment(4);
+        Type* inst_ty= val->getType();
+        Value* val_c;
+        //##double6
+        if(inst_ty->isDoubleTy()){
+            val_c = UndefValue::get(VectorType::get(inst_ty, 2));
+            for (unsigned i = 0; i < 2; i++)//for 4 copies
+            {
+                val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i),"insertCall");  
+            }
+        }else{
+            val_c = UndefValue::get(VectorType::get(inst_ty, 4));
+            for (unsigned i = 0; i < 4; i++)//for 4 copies
+            {
+                val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i),"insertCall");  
+            }
+        }
+        auto store_val=builder.CreateStore(val_c,CallInstVec);
+        store_val->setAlignment(4);
+        auto load_val=builder.CreateLoad(CallInstVec);
+        load_val->setAlignment(4);
+        return load_val;
+        /*AllocaInst* CallInstVec;
+        //##double3
+        if(op_type->isDoubleTy()){
+            CallInstVec = builder.CreateAlloca(VectorType::get(val->getType(), 2),nullptr,"CallInstVec");
+        }else{
+            CallInstVec = builder.CreateAlloca(VectorType::get(val->getType(), 4),nullptr,"CallInstVec");
+        }
+        
+        CallInstVec->setAlignment(16);
+
+        Type* inst_ty= val->getType();
+        auto alloca_c = builder.CreateAlloca(inst_ty);
+        alloca_c->setAlignment(4);
+        auto store_c = builder.CreateStore(val,alloca_c);
+        auto load_c = builder.CreateLoad(alloca_c);
+        load_c->setAlignment(4);
+        Value* val_c;
+        //##double4
+        if(op_type->isDoubleTy()){
+            val_c = UndefValue::get(VectorType::get(inst_ty, 2));
+            for (unsigned i = 0; i < 2; i++)//for 4 copies
+            {
+                val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i),"insertCall");  
+            }
+        }else{
+            val_c = UndefValue::get(VectorType::get(inst_ty, 4));
+            for (unsigned i = 0; i < 4; i++)//for 4 copies
+            {
+                val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i),"insertCall");  
+            }
+        }
+        
+        auto store_val=builder.CreateStore(val_c,CallInstVec);
+        store_val->setAlignment(4);
+        auto load_val=builder.CreateLoad(CallInstVec);
+        load_val->setAlignment(4);
+        return load_val;*/
+    }else if(isa<CastInst>(val)){
+        errs()<< "Find Cast Inst: "<<*val <<"\n";
+        Value* CastInst = vec_map.GetVector(val);
+        Value* CastInstVec= vec_map.GetVector(CastInst);
+        errs()<< "Alloca: "<<*CastInst <<"\n";
+        errs()<< "Vector: "<<*CastInstVec <<"\n";
+
+        auto store_c = builder.CreateStore(val,CastInst);
+        auto load_c = builder.CreateLoad(CastInst);
+        load_c->setAlignment(4);
+        Type* inst_ty= val->getType();
+        Value* val_c;
+        //##double6
+        if(inst_ty->isDoubleTy()){
+            val_c = UndefValue::get(VectorType::get(inst_ty, 2));
+            for (unsigned i = 0; i < 2; i++)//for 4 copies
+            {
+                val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i),"insertCast");  
+            }
+        }else{
+            val_c = UndefValue::get(VectorType::get(inst_ty, 4));
+            for (unsigned i = 0; i < 4; i++)//for 4 copies
+            {
+                val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i),"insertCast");  
+            }
+        }
+        auto store_val=builder.CreateStore(val_c,CastInstVec);
+        store_val->setAlignment(4);
+        auto load_val=builder.CreateLoad(CastInstVec);
+        load_val->setAlignment(4);
+        return load_val;
+        /*AllocaInst* CastInstVec;
+        //##double5
+        if(op_type->isDoubleTy()){
+            CastInstVec = builder.CreateAlloca(VectorType::get(val->getType(), 2),nullptr,"CastInstVec");
+        }else{
+            CastInstVec = builder.CreateAlloca(VectorType::get(val->getType(), 4),nullptr,"CastInstVec");
+        }
+        
+        CastInstVec->setAlignment(16);
+        Type* inst_ty= val->getType();
+        auto alloca_c = builder.CreateAlloca(inst_ty);
+        alloca_c->setAlignment(4);
+        auto store_c = builder.CreateStore(val,alloca_c);
+        auto load_c = builder.CreateLoad(alloca_c);
+        load_c->setAlignment(4);
+        Value* val_c;
+        //##double6
+        if(op_type->isDoubleTy()){
+            val_c = UndefValue::get(VectorType::get(inst_ty, 2));
+            for (unsigned i = 0; i < 2; i++)//for 4 copies
+            {
+                val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i),"insertCast");  
+            }
+        }else{
+            val_c = UndefValue::get(VectorType::get(inst_ty, 4));
+            for (unsigned i = 0; i < 4; i++)//for 4 copies
+            {
+                val_c = builder.CreateInsertElement(val_c,load_c, builder.getInt32(i),"insertCast");  
+            }
+        }
+        
+        auto store_val=builder.CreateStore(val_c,CastInstVec);
+        store_val->setAlignment(4);
+        auto load_val=builder.CreateLoad(CastInstVec);
+        load_val->setAlignment(4);
+        return load_val;
+        //CastInst* bin_inst=cast<CastInst>(val);
+        //errs()<<"bin_inst:"<<*bin_inst<<"\n";
+        //Value *bin_vec = vec_map.GetVector(bin_inst);
+        //errs()<<"get vector:"<<*bin_vec<<"\n";
+        */
+        /*
+        bool IsExctact=true;
+    
+        Instruction* vop = cast<Instruction>(val);
+       
+        //errs()<< "a! "<<*val <<"\n";
+        Value* lhs = vop->getOperand(0);
+        //errs()<< "b! "<<*val <<"\n";
+        errs()<< " lhs: "<<*lhs <<"\n";
+        if(isa<LoadInst>(lhs)){
+            errs()<< "Get Load!\n";
+            LoadInst* ld_inst = cast<LoadInst>(lhs);
+            Value* sca = ld_inst->getPointerOperand();
+            errs()<<"sca:"<<*sca<<"\n";
+            if(vec_map.Findpair(sca))
+            {
+                Value *alloca_vec = vec_map.GetVector(sca);
+                errs()<<"get vector:"<<*alloca_vec<<"\n";
+                //create load before "add"
+                LoadInst* load_val=builder.CreateLoad(alloca_vec);
+                load_val->setAlignment(16);
+                return GetTranslateTy(builder,load_val,val,IsExctact);
+            }else{
+                errs()<<"No get vector!"<<"\n";
+                IsExctact=false;
+                return GetTranslateTy(builder,lhs,val,IsExctact);
+            }
+            //return GetTranslateTy(builder,load_val,val);
+            }else if(isa<BinaryOperator>(lhs)){
+                errs()<< "Get BinaryOp!\n";
+                //errs()<< "****GetVecOpValue BinaryOperator:\n";
+                BinaryOperator* bin_inst=cast<BinaryOperator>(lhs);
+               // errs()<<"bin_inst:"<<*bin_inst<<"\n";
+                //Value *bin_vec = vec_map.GetVector(bin_inst);
+                
+                if(vec_map.Findpair(lhs))
+                {
+                    Value *alloca_vec = vec_map.GetVector(bin_inst);
+               
+                    errs()<<"get vector:"<<*alloca_vec<<"\n";
+                
+                    return GetTranslateTy(builder,alloca_vec,val,IsExctact);
+                }else{
+                    errs()<<"No get vector!"<<"\n";
+                    IsExctact=false;
+                    return GetTranslateTy(builder,lhs,val,IsExctact);
+                }
+                
+            }*/
+            
+    }else {
+        errs()<< "return else: Transforms Not Support Type: "<<*val <<"\n";
+        return NULL;
+           //errs()<< "Transforms Type: "<<*val <<"\n";
+        /*    
+        bool IsExctact=true;//no use
+        if(isa<Instruction>(val)){//slove ex. %2 can't not find
             Instruction* vop = cast<Instruction>(val);
            
-            
+            //errs()<< "a! "<<*val <<"\n";
             Value* lhs = vop->getOperand(0);
+            //errs()<< "b! "<<*val <<"\n";
             errs()<< " lhs: "<<*lhs <<"\n";
             if(isa<LoadInst>(lhs)){
-                errs()<< "Got Load!\n";
+                errs()<< "Get Load!\n";
                 LoadInst* ld_inst = cast<LoadInst>(lhs);
                 Value* sca = ld_inst->getPointerOperand();
                 errs()<<"sca:"<<*sca<<"\n";
@@ -241,20 +462,61 @@ namespace {
                     IsExctact=false;
                     return GetTranslateTy(builder,lhs,val,IsExctact);
                 }
-                //return GetTranslateTy(builder,load_val,val);
+            //return GetTranslateTy(builder,load_val,val);
             }else if(isa<BinaryOperator>(lhs)){
-                errs()<< "Got BinaryOp!\n";
+                errs()<< "Get BinaryOp!\n";
                 //errs()<< "****GetVecOpValue BinaryOperator:\n";
                 BinaryOperator* bin_inst=cast<BinaryOperator>(lhs);
-                //errs()<<"bin_inst:"<<*bin_inst<<"\n";
-                Value *bin_vec = vec_map.GetVector(bin_inst);
-                //errs()<<"get vector:"<<*bin_vec<<"\n";
-                return bin_vec;
+                errs()<<"bin_inst:"<<*bin_inst<<"\n";
+                //Value *bin_vec = vec_map.GetVector(bin_inst);
+                
+                if(vec_map.Findpair(bin_inst))
+                {
+                    Value *alloca_vec = vec_map.GetVector(bin_inst);
+               
+                    errs()<<"get vector:"<<*alloca_vec<<"\n";
+                
+                    return GetTranslateTy(builder,alloca_vec,val,IsExctact);
+                }else{
+                    errs()<<"No get vector!"<<"\n";
+                    IsExctact=false;
+                    return GetTranslateTy(builder,bin_inst,val,IsExctact);
+                }
+                
             }*/
+        /*}else{
+
+         errs()<< "return else: Transforms Not Support Type: "<<*val <<"\n";
+         return NULL;
+        }*/
+        
         }
       return NULL;
   }
-  
+  /*void createAllocaVec(IRBuilder<> builder,Value* op,VectorizeMap vec_map, Type* scalar_t){
+            
+            if(scalar_t->isIntegerTy()){
+                
+                //errs()<<"Find integer:"<<*scalar_t<<"\n";
+                auto allocaVec = builder.CreateAlloca(VectorType::get(scalar_t, 4),nullptr,"allocaVec");
+                allocaVec->setAlignment(16);
+                //errs()<<"address sca:"<<*op<<",vec:"<<*allocaVec<<"\n";
+                vec_map.AddPair(op,allocaVec);
+                //get vector demo
+                auto *vec = vec_map.GetVector(op);
+                errs()<<*op<< "-->into Vector:"<<*vec<<"\n";
+                //errs()<<"get vector:"<<*vec<<"\n";
+            }  
+            else if(scalar_t->isFloatTy()){
+                auto allocaVec = builder.CreateAlloca(VectorType::get(scalar_t, 4),nullptr,"allocaVec");
+                allocaVec->setAlignment(16);
+                //errs()<<"address sca:"<<*op<<",vec:"<<*allocaVec<<"\n";
+                vec_map.AddPair(op,allocaVec);
+                //get vector demo
+                auto *vec = vec_map.GetVector(op);
+                errs()<<*op<< "-->into Vector:"<<*vec<<"\n";
+            }
+  }*/
   struct TolerancePass : public FunctionPass {
     static char ID;
     TolerancePass() : FunctionPass(ID) {}
@@ -264,7 +526,7 @@ namespace {
       //errs() << "Function body:\n";
       //F.dump();
       VectorizeMap vec_map,check_map,recovery_map,recovery_map1,vec_stored_map;
-      std::vector<Value*> binop,loadbefore,CheckPoint,RecoveryPoint;
+      std::vector<Value*> binop,loadbefore,CheckPoint,RecoveryPoint, Cast_op, Call_op;
       static LLVMContext TheContext;
       bool allcheck=false;
       //Dependence pass
@@ -272,6 +534,27 @@ namespace {
        
         for (auto &I : B) {
             if (auto *op = dyn_cast<BinaryOperator>(&I)) {
+                //handle castinst and callinst
+                Value* lhs = op->getOperand(0);
+                Value* rhs = op->getOperand(1);
+                errs()<<"lhs:"<<*lhs<<"\n";
+                errs()<<"rhs:"<<*rhs<<"\n";
+                //castinst
+                if(isa<CastInst>(lhs)){
+                    Cast_op.push_back(lhs);
+                }
+                if(isa<CastInst>(rhs)){
+                    Cast_op.push_back(rhs);
+                }
+                //callinst
+                if(isa<CallInst>(lhs)){
+                    Call_op.push_back(lhs);
+                }
+                if(isa<CallInst>(rhs)){
+                    Call_op.push_back(rhs);
+                }
+
+                //--------------------------------//
                 //add into array
                 binop.push_back(op);
             }
@@ -377,8 +660,10 @@ namespace {
       errs()<<"*=*=*CheckPoint:\n";
       bool Pflag=false;
       //CREATE recovery allocation instruction
+      //AND castinst and callinst allocation
       for(int i=0; i<CheckPoint.size(); i++)
          errs()<<"CheckPoint:"<<*CheckPoint[i]<<"\n";
+
          for (auto &B : F) {
             for (auto &I : B) {
                 if (auto *op = dyn_cast<AllocaInst>(&I)) {
@@ -394,6 +679,44 @@ namespace {
                         recovery->setAlignment(4);
                         errs()<<"!!!!!!!!!!!!!!!!!"<<*recovery<<"\n";
                         RecoveryPoint.push_back(recovery);
+                        Pflag=true;
+                    }
+                    //build castinst allocation inst
+                    for(int i=0; i<Cast_op.size(); i++){
+                        Instruction* vop = cast<Instruction>(Cast_op[i]);
+                        Type* op_type = vop->getType();
+                        AllocaInst* castinst=builder.CreateAlloca(op_type,nullptr,"CastInst");
+                        castinst->setAlignment(4);
+                        errs()<<"!!!!!!!!!!!!!!!!!"<<*castinst<<"\n";
+                        //##double
+                        AllocaInst* CastInstVec;
+                        if(op_type->isDoubleTy()){
+                            CastInstVec = builder.CreateAlloca(VectorType::get(op_type, 2),nullptr,"CastInstVec");
+                        }else{
+                            CastInstVec = builder.CreateAlloca(VectorType::get(op_type, 4),nullptr,"CastInstVec");
+                        }
+                        CastInstVec->setAlignment(16);
+                        vec_map.AddPair(Cast_op[i],castinst);
+                        vec_map.AddPair(castinst,CastInstVec);
+                        Pflag=true;
+                    }
+                     //build callinst allocation inst
+                    for(int i=0; i<Call_op.size(); i++){
+                        Instruction* vop = cast<Instruction>(Call_op[i]);
+                        Type* op_type = vop->getType();
+                        AllocaInst* callinst=builder.CreateAlloca(op_type,nullptr,"CallInst");
+                        callinst->setAlignment(4);
+                        errs()<<"!!!!!!!!!!!!!!!!!"<<*callinst<<"\n";
+                        //##double
+                        AllocaInst* CallInstVec;
+                        if(op_type->isDoubleTy()){
+                            CallInstVec = builder.CreateAlloca(VectorType::get(op_type, 2),nullptr,"CallInstVec");
+                        }else{
+                            CallInstVec = builder.CreateAlloca(VectorType::get(op_type, 4),nullptr,"CallInstVec");
+                        }
+                        CallInstVec->setAlignment(16);
+                        vec_map.AddPair(Call_op[i],callinst);
+                        vec_map.AddPair(callinst,CallInstVec);
                         Pflag=true;
                     }
                 }
@@ -424,7 +747,7 @@ namespace {
             //errs()<<*scalar_t<<"\n";
             //errs()<<*scalar_t1<<"\n";
             //support inst type?
-            if(scalar_t->isIntegerTy()){
+            if(scalar_t->isIntegerTy()){//32bits --> [Integer,Integer,Integer,Integer]
                 
                 //errs()<<"Find integer:"<<*scalar_t<<"\n";
                 auto allocaVec = builder.CreateAlloca(VectorType::get(scalar_t, 4),nullptr,"allocaVec");
@@ -436,7 +759,7 @@ namespace {
                 errs()<< "Tolerance:Create AllocaInst Vectorty:"<<*vec<<"\n";
                 //errs()<<"get vector:"<<*vec<<"\n";
             }  
-            else if(scalar_t->isFloatTy()){
+            else if(scalar_t->isFloatTy()){//32bits --> [Float,Float,Float,Float]
                 auto allocaVec = builder.CreateAlloca(VectorType::get(scalar_t, 4),nullptr,"allocaVec");
                 allocaVec->setAlignment(16);
                 //errs()<<"address sca:"<<*op<<",vec:"<<*allocaVec<<"\n";
@@ -444,11 +767,14 @@ namespace {
                 //get vector demo
                 auto *vec = vec_map.GetVector(op);
                 errs()<< "Tolerance:Create FloatInst Vectorty:"<<*vec<<"\n";
-            }else if(scalar_t->isVectorTy()){
-                //errs()<<"Find vector:"<<*scalar_t<<"\n";
-            }
-            else if(scalar_t->isVectorTy()){
-                //errs()<<"Find vector:"<<*scalar_t<<"\n";
+            }else if(scalar_t->isDoubleTy()){//64bits --> [Double,Double]
+                auto allocaVec = builder.CreateAlloca(VectorType::get(scalar_t, 2),nullptr,"allocaVec");
+                allocaVec->setAlignment(16);
+                //errs()<<"address sca:"<<*op<<",vec:"<<*allocaVec<<"\n";
+                vec_map.AddPair(op,allocaVec);
+                //get vector demo
+                auto *vec = vec_map.GetVector(op);
+                errs()<< "Tolerance:Create FloatInst Vectorty:"<<*vec<<"\n";
             }
         }
 
@@ -489,17 +815,33 @@ namespace {
                 errs()<<"*~Find Load_p:"<<*loadinst_ptr<<"\n";
                 errs()<<"Tolerance:Create Vector Element.\n";
                 PrintMap(&vec_map);
+                Value* val;
                 if(vec_map.Findpair(loadinst_ptr)){
-                    Value* val = UndefValue::get(VectorType::get(load_ty, 4));
-                    //LoadInst* load_val=builder.CreateLoad(loadinst_ptr);
-                    //load_val->setAlignment(4);
-                    for (unsigned i = 0; i < 4; i++)//for 4 copies
-                    {
-                        //errs()<<"*****load_val:"<<*load_val<<"\n";
-                        //errs()<<"******:"<<*loadinst_ptr<<"\n";
-                        //create insertelement instruction
-                        val = builderafter.CreateInsertElement(val,op, builderafter.getInt32(i),"insertElmt");  
-                        errs()<<"******val:"<<*val<<"\n";
+                    //##double1
+                    if(load_ty->isDoubleTy()){
+                         val = UndefValue::get(VectorType::get(load_ty, 2));
+                        //LoadInst* load_val=builder.CreateLoad(loadinst_ptr);
+                        //load_val->setAlignment(4);
+                        for (unsigned i = 0; i < 2; i++)//for 4 copies
+                        {
+                            //errs()<<"*****load_val:"<<*load_val<<"\n";
+                            //errs()<<"******:"<<*loadinst_ptr<<"\n";
+                            //create insertelement instruction
+                            val = builderafter.CreateInsertElement(val,op, builderafter.getInt32(i),"insertElmt");  
+                            errs()<<"******val:"<<*val<<"\n";
+                        }
+                    }else{
+                        val = UndefValue::get(VectorType::get(load_ty, 4));
+                        //LoadInst* load_val=builder.CreateLoad(loadinst_ptr);
+                        //load_val->setAlignment(4);
+                        for (unsigned i = 0; i < 4; i++)//for 4 copies
+                        {
+                            //errs()<<"*****load_val:"<<*load_val<<"\n";
+                            //errs()<<"******:"<<*loadinst_ptr<<"\n";
+                            //create insertelement instruction
+                            val = builderafter.CreateInsertElement(val,op, builderafter.getInt32(i),"insertElmt");  
+                            errs()<<"******val:"<<*val<<"\n";
+                        }
                     }
                     //get vector in map
                 
@@ -515,26 +857,29 @@ namespace {
                 //errs()<<"create store:"<<*store_val<<"\n";
                 }
             }
-        }
+        }/*else if (auto *op = dyn_cast<CastInst>(&I)) {
+        }*/
         //Find operator to neon duplication
         else if (auto *op = dyn_cast<BinaryOperator>(&I)) {
             //errs()<<"Tolerance:Find BinaryOperator\n";
             auto op_name= I.getOpcodeName();
             Type* op_type = op->getType();
             //auto op_name1= op->getOpcode();
+            errs()<<"OP:"<<*op<<"\n";
             errs()<<"OP Type:"<<*op_type<<"\n";
             errs()<<"-*-*BinaryOperator is:"<<op_name<<"\n";
             // Insert at the point where the instruction `op` appears.
             IRBuilder<> builder(op);
             Value* lhs = op->getOperand(0);
             Value* rhs = op->getOperand(1);
-            //errs()<<"lhs:"<<*lhs<<"\n";
-            //errs()<<"rhs:"<<*rhs<<"\n";
+            errs()<<"lhs:"<<*lhs<<"\n";
+            errs()<<"rhs:"<<*rhs<<"\n";
             //Value *mul_value = ConstantInt::get(op->getType() , 3); 
             //Value* mul = builder.CreateMul(lhs, mul_value);
-            Value* load_val1=GetVecOpValue(builder,lhs,vec_map);
-            Value* load_val2=GetVecOpValue(builder,rhs,vec_map);
+            Value* load_val1=GetVecOpValue(builder,lhs,vec_map,op_type);
+            Value* load_val2=GetVecOpValue(builder,rhs,vec_map,op_type);
             Value *vop;
+            //free time, using binaryoperator::create!!
             //#1
             if(strcmp(op_name, "add") == 0){// find op is "add"
             //errs()<<"Find add:"<<op_name<<"\n";
@@ -685,10 +1030,21 @@ namespace {
                     bool Cflag=false;
                     Value *rdst = user->getOperand(1);
                 errs()<<"XXXXXXXXXXXxrdst:"<<*rdst<<"\n";
-                auto *vecdst  = vec_map.GetVector(rdst);
-                //errs()<<"XXXXXXXXXXXxVOPd:"<<*vop<<"\n";
-                //errs()<<"XXXXXXXXXXXxFind:"<<*vecdst<<"\n";
-                Value *vecstr = builder.CreateStore(vop,vecdst);
+                Value *vecdst;
+                /*if(isa<GetElementPtrInst>(rdst)){
+                    errs()<<"XXXXXXXXXXXGetElementPtrInst:"<<*rdst<<"\n";
+                    GetElementPtrInst* rinst=cast<GetElementPtrInst>(rdst);
+                    Type* scalar_t= rinst->getSourceElementType();//not pointer
+                    createAllocaVec(builder,rdst,vec_map, scalar_t);
+                }*/
+                if(vec_map.IsAdded(rdst)){
+                    vecdst  = vec_map.GetVector(rdst);  
+                    //errs()<<"XXXXXXXXXXXxVOPd:"<<*vop<<"\n";
+                    errs()<<"XXXXXXXXXXXxFind:"<<*vecdst<<"\n";
+                    Value *vecstr = builder.CreateStore(vop,vecdst);
+                    vec_stored_map.AddPair(rdst,vecdst);//save vec have stored map  
+                }
+
                 vec_stored_map.AddPair(rdst,vecdst);//save vec have stored map
                     for(int i=0; i<CheckPoint.size(); i++){
                         //errs()<<"@@@@@@@@@@@@@@@@Nocheck:"<<*CheckPoint[i]<<"\n";
@@ -721,6 +1077,10 @@ namespace {
                         mul_value = ConstantFP::get(op->getType() , 3.0); 
                         mul = builderafter.CreateFMul(op, mul_value,"Fmul");
                         //errs()<<"Fmul"<<*mul<<"\n";
+                    }else if(op_type->isDoubleTy()){
+                        mul_value = ConstantFP::get(op->getType() , 3.0); 
+                        mul = builderafter.CreateFMul(op, mul_value,"Fmul");
+                        //errs()<<"Fmul"<<*mul<<"\n";
                     }else {
                     errs()<<"#2 Not Support Operator Type:"<<*op_type<<"\n";
                     }
@@ -738,9 +1098,19 @@ namespace {
                     uint64_t lane0= 0;
                     uint64_t lane1= 1;
                     uint64_t lane2= 2;
-                    auto *ex0=builder.CreateExtractElement(load_vec,lane0,"extractE");
-                    auto *ex1=builder.CreateExtractElement(load_vec,lane1,"extractE");
-                    auto *ex2=builder.CreateExtractElement(load_vec,lane2,"extractE");
+                    Value *ex0;
+                    Value *ex1;
+                    Value *ex2;
+                    //#2.5 float --> three element, double --> two element
+                    if(op_type->isDoubleTy()){
+                        ex0=builder.CreateExtractElement(load_vec,lane0,"extractE");
+                        ex1=builder.CreateExtractElement(load_vec,lane1,"extractE");
+                    }else{
+                        ex0=builder.CreateExtractElement(load_vec,lane0,"extractE");
+                        ex1=builder.CreateExtractElement(load_vec,lane1,"extractE");
+                        ex2=builder.CreateExtractElement(load_vec,lane2,"extractE");
+                    }
+                    
                     
                     //Instruction* recoveryinst=cast<Instruction>(ex2);
                     //AllocaInst* recovery=builder.CreateAlloca(recoveryinst->getType(),nullptr,"Recovery");
@@ -761,6 +1131,11 @@ namespace {
                     }else if(op_type->isFloatTy()){
                     vadd = builder.CreateFAdd(ex0,ex1,"sum");
                     vadd1 = builder.CreateFAdd(vadd ,ex2,"sum");
+                    //errs()<<"Fadd"<<*vadd<<"\n";
+                    fault_check=builderafter.CreateFCmpUNE(vadd1,mul,"Fcmp");
+                    }else if(op_type->isDoubleTy()){
+                    vadd = builder.CreateFAdd(ex0,ex1,"sum");
+                    vadd1 = builder.CreateFAdd(vadd ,ex1,"sum");//ex1 add double times
                     //errs()<<"Fadd"<<*vadd<<"\n";
                     fault_check=builderafter.CreateFCmpUNE(vadd1,mul,"Fcmp");
                     }else {
@@ -880,6 +1255,19 @@ namespace {
                               
                                 cmp_three = builderCheck.CreateFCmpUNE(mod_three,mul_value,"FcmpThree");
                                 //errs()<<"Fcmp :"<<*cmp_three <<"\n"; 
+                            }else if(op_type->isDoubleTy()){
+                                
+                                mod_three = builderCheck.CreateFDiv(lhs,ex0,"remThree");
+                                
+                                Instruction* ty= cast<Instruction>(mod_three);
+                                mul_value = ConstantFP::get(ty->getType() , 3);
+                               
+                                //errs()<<"Fmod_three:"<<*mod_three<<"\n";   
+                                //errs()<<"Fmul_value :"<<*mul_value <<"\n";   
+                                //cmp div ex0 = 3
+                              
+                                cmp_three = builderCheck.CreateFCmpUNE(mod_three,mul_value,"FcmpThree");
+                                //errs()<<"Fcmp :"<<*cmp_three <<"\n"; 
                             }else {
                             errs()<<"#4 Not Support Operator Type:"<<*op_type<<"\n";
                             }
@@ -950,7 +1338,7 @@ namespace {
       //PrintMap(&recovery_map);
       errs()<<"Recovery Map1:\n";
       PrintMap(&recovery_map1);
-     errs()<<"Basic block num:"<<basic_num<<"\n";
+      errs()<<"Basic block num:"<<basic_num<<"\n";
       //PrintMap(&check_map);
       return true;
     }
@@ -962,4 +1350,3 @@ char TolerancePass::ID = 0;
 static RegisterPass<TolerancePass> X("tolerance", "Tolerance Pass",
                              false /* Only looks at CFG */,
                              false /* Analysis Pass */);
-
