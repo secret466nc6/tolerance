@@ -13,12 +13,13 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/LLVMContext.h"
+
 using namespace llvm;
 
 namespace {
   typedef std::map<Value*, Value*> VectorizeMapTable;
   std::vector<Value*> All_check, Real_check;
-   int recovery_alloca=0;
+  int recovery_alloca=0;
   int recovery_inst=0;
   int recovery_check=0;
   int recovery_num=0;
@@ -872,8 +873,36 @@ namespace {
                     errs()<<"Error: in Vector operator:"<<*op<<"\n";
                     
                     }
+            }else if(strcmp(op_name, "srem") == 0){
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    vop = builder.CreateSRem(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "urem") == 0){
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    vop = builder.CreateURem(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
+            }else if(strcmp(op_name, "frem") == 0){
+                    if(load_val1!=NULL&&load_val2!=NULL) {
+                    vop = builder.CreateFRem(load_val1,load_val2,"Vop");
+                    //errs()<<"Create Vop:"<<*vop<<"\n";
+                    vec_map.AddPair(op, vop);
+                    }else{
+                    errs()<<"Error: in Vector operator:"<<*op<<"\n";
+                    
+                    }
             }else {
                 errs()<<"####1 Not Support Operator Type:"<<*op_name<<"\n";
+                I.dump();
             }
 
             /**Find Check Point**/
@@ -1087,6 +1116,7 @@ namespace {
       errs()<<"Real_check:"<<Real_check.size()<<"\n";
       for(int i=0; i<Real_check.size(); i++) errs()<<i<<": "<<*Real_check[i]<<"\n";*/
       //PrintMap(&check_map);
+      errs()<<"recovery_num:"<<recovery_num<<"\n";
       return true;
     }
   };
