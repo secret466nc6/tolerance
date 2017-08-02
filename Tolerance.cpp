@@ -13,8 +13,16 @@
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Value.h"
 #include "llvm/IR/LLVMContext.h"
+#include <llvm/Support/CommandLine.h>
 
 using namespace llvm;
+
+static cl::opt<bool>
+    CheckTRUMP("check-TRUMP", cl::Optional, cl::init(false),
+    cl::desc("Using TRUMP to check"));
+static cl::opt<bool>
+    CheckMajority("check-majority", cl::Optional, cl::init(false),
+    cl::desc("Using Majority to check"));
 
 namespace {
   typedef std::map<Value*, Value*> VectorizeMapTable;
@@ -209,6 +217,142 @@ namespace {
                             Instruction* faultinst=cast<Instruction>(fault_check);
                             Value* lhs = faultinst->getOperand(0);
                             Value* rhs = faultinst->getOperand(1);
+                            Value *recovery_val = recovery_map.GetVector(op);
+
+                            //BinaryOperator* op_inst= cast<BinaryOperator>(recovery_val);
+                            Type* op_type =recovery_val ->getType();
+                         
+                            //before:
+                            //  Head
+                            //  op
+                            //  Tail
+                            //after:
+                            //  Head
+                            //  if(fault_check)
+                            //      checkTerm
+                            //  op
+                            //  Tail
+                            TerminatorInst* checkTerm = SplitBlockAndInsertIfThen(fault_check, op,false);
+                   
+                          
+                            IRBuilder<> builderCheck(checkTerm);
+                            //Taking mul_three value div by ex0, because only Interger can use Rem operator.
+                            //Inter use SDIV, Float use FDIV.
+                       
+                            //#4
+                            Value *mod_three,*mul_value,*cmp_three;
+                            if(op_type->isIntegerTy()){
+                                 
+                                mod_three = builderCheck.CreateSDiv(lhs,ex0,"remThree");
+                                
+                                Instruction* ty= cast<Instruction>(mod_three);
+                                mul_value = ConstantInt::get(ty->getType() , 3);
+                               
+                                //errs()<<"mod_three:"<<*mod_three<<"\n";   
+                                //errs()<<"mul_value :"<<*mul_value <<"\n";   
+                                //cmp div ex0 = 3
+                              
+                                cmp_three = builderCheck.CreateICmpNE(mod_three,mul_value,"FcmpThree");
+                            }else if(op_type->isFloatTy()){
+                                
+                                mod_three = builderCheck.CreateFDiv(lhs,ex0,"remThree");
+                                
+                                Instruction* ty= cast<Instruction>(mod_three);
+                                mul_value = ConstantFP::get(ty->getType() , 3);
+                               
+                                //errs()<<"Fmod_three:"<<*mod_three<<"\n";   
+                                //errs()<<"Fmul_value :"<<*mul_value <<"\n";   
+                                //cmp div ex0 = 3
+                              
+                                cmp_three = builderCheck.CreateFCmpUNE(mod_three,mul_value,"FcmpThree");
+                                //errs()<<"Fcmp :"<<*cmp_three <<"\n"; 
+                            }else if(op_type->isDoubleTy()){
+                                
+                                mod_three = builderCheck.CreateFDiv(lhs,ex0,"remThree");
+                                
+                                Instruction* ty= cast<Instruction>(mod_three);
+                                mul_value = ConstantFP::get(ty->getType() , 3);
+                               
+                                //errs()<<"Fmod_three:"<<*mod_three<<"\n";   
+                                //errs()<<"Fmul_value :"<<*mul_value <<"\n";   
+                                //cmp div ex0 = 3
+                              
+                                cmp_three = builderCheck.CreateFCmpUNE(mod_three,mul_value,"FcmpThree");
+                                //errs()<<"Fcmp :"<<*cmp_three <<"\n"; 
+                            }else {
+                                errs()<<"####4 Not Support Operator Type:"<<*op_type<<"\n";
+                            }
+                            //}
+                            //for ( BasicBlock::iterator i = checkTerm->begin(), e = checkTerm->end();i!= e; ++i)
+                            //errs()<<"end"<<*checkTerm<<"\n";   
+                            //Then = div 3 can recovery
+                            unsigned size = op_type->getPrimitiveSizeInBits();
+                           
+                            TerminatorInst *ThenTerm , *ElseTerm ;
+
+                            SplitBlockAndInsertIfThenElse(cmp_three, checkTerm, &ThenTerm, &ElseTerm,nullptr);
+                            IRBuilder<> builderRecovery(ThenTerm);
+                            auto* store_recovery=builderRecovery.CreateStore(recovery_val,recovery);
+                            store_recovery->setAlignment(size/8);
+                            //Else = original i
+                            IRBuilder<> builderRecoveryElse(ElseTerm);                           
+                            
+                            auto* store_recoveryElse=builderRecoveryElse.CreateStore(ex0,recovery);
+                            store_recoveryElse->setAlignment(size/8);
+                            
+                            check_flag=1;
+                            Real_check.push_back(op);
+                            recovery_check++;
+                            //errs()<<"Delete Map!\n";
+                            recovery_map.DeleteVal(op);
+                            ////user->setOperand(U.getOperandNo(), mul);//final store
+                           
+                        }//if end
+                    }//find store end
+                    
+                    if(check_flag) break;
+                    }//Basciblock
+                    
+                if(check_flag) break;
+            }//Function
+      }
+}
+void Test(){
+    errs()<<"@@@@@@@@@@@Majority\n";
+}
+void InsertMajority(Function &F,VectorizeMap check_map, VectorizeMap recovery_map1, VectorizeMap recovery_map){
+    for(int i =0 ; i<recovery_map1.GetSize(); i++){
+        //errs()<<"Recovery Map:\n";
+         //PrintMap(&recovery_map);
+        
+         //errs()<<"Start Insert Check!\n";
+         
+            bool check_flag=0;
+            for (auto &B : F) {
+                //errs()<<"----------\n";
+                //B.dump();
+               // errs()<<"----------\n";
+                for (auto &I : B) {
+                    //insert check before store
+                    //I.dump();
+                    if (StoreInst *op = dyn_cast<StoreInst>(&I)) {
+                       //errs()<<"FFF:"<<*op<<"\n";
+                       if(recovery_map.IsAdded(op)){
+                            
+                            //errs()<<"Insert check!\n";
+                            //errs()<<"@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@"<<*op<<"\n";
+                             
+                            
+                          
+                            IRBuilder<> builder(op);
+                            Value *fault_check = check_map.GetVector(op);
+                            Value *recovery = recovery_map1.GetVector(op);
+                            //errs()<<"OP:"<<*op<<"\n";
+                            //errs()<<"fault_check"<<*fault_check<<"\n";  
+                            Value *ex0 = check_map.GetVector(fault_check);
+                            Instruction* faultinst=cast<Instruction>(fault_check);
+                            Value* lhs = faultinst->getOperand(0);//protected value
+                            Value* rhs = faultinst->getOperand(1);//memory address
                             Value *recovery_val = recovery_map.GetVector(op);
 
                             //BinaryOperator* op_inst= cast<BinaryOperator>(recovery_val);
@@ -1084,6 +1228,11 @@ namespace {
       //Create Fault Recovery
       //Delete map value after insert successfully
       InsertCheck(F,check_map,recovery_map1,recovery_map);
+      
+      if(CheckMajority)
+      {
+        Test();
+      }
       //replace recovery value to store
       ReplaceRecoveryVal(F, recovery_map1);
      
